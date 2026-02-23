@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Baseball - HTML5</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <div id="scoreboard">
+            <div class="score-box">
+                <span class="label">AWAY</span>
+                <span id="score-away" class="value">0</span>
+            </div>
+            <div class="score-box">
+                <span class="label">INNING</span>
+                <span id="inning" class="value">1 TOP</span>
+            </div>
+            <div class="score-box">
+                <span class="label">HOME</span>
+                <span id="score-home" class="value">0</span>
+            </div>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        <div id="controls">
+            <p>按 <strong>空白鍵</strong> 或 <strong>點擊畫面</strong> 揮棒</p>
+        </div>
+    </div>
+    <script src="game.js"></script>
+</body>
+</html>
