@@ -3,6 +3,7 @@ const ctx = canvas.getContext('2d');
 const pitchButtons = Array.from(document.querySelectorAll('.pitch-btn'));
 const mobileHint = document.querySelector('#mobile-controls .mobile-hint');
 const MOBILE_INPUT_QUERY = window.matchMedia("(max-width: 768px), (hover: none) and (pointer: coarse)");
+const gameContainer = document.getElementById('game-container');
 
 canvas.width = 600;
 canvas.height = 600;
@@ -531,6 +532,10 @@ function draw() {
 }
 
 function loop() { update(); syncMobileControls(); draw(); requestAnimationFrame(loop); }
+
+if (gameContainer) {
+    gameContainer.addEventListener('contextmenu', (e) => e.preventDefault());
+}
 
 pitchButtons.forEach((btn) => {
     btn.addEventListener('click', () => setPitchType(btn.dataset.pitch));
