@@ -88,6 +88,14 @@ const BALL_FLIGHT = {
     minCatchHeight: 8,
     maxVisualLift: 48
 };
+const GAME_SPEED = {
+    pitchBase: 2.7,          // 投球基礎速度
+    hitPowerScale: 0.84,     // 擊球初速倍率（降低可減少長打）
+    fielderChase: 0.042,     // 守備追球速度
+    fielderReset: 0.10,      // 守備回位速度
+    airDrag: 0.986,          // 空中阻力
+    groundDrag: 0.94         // 落地滾動阻力
+};
 
 let ball = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, active: false, hit: false, wasInZone: false, caught: false, resultChecked: false, type: "FAST", speed: 2.2, isHBP: false, hitFrames: 0 };
 let bat = { angle: 0, swinging: false, speed: 0.2, pivot: {x:0, y:0}, dir: 1, base: 0, target: 0 };
@@ -181,7 +189,7 @@ function pitch(tx = null) {
     ball.active = true; ball.hit = false; ball.wasInZone = false; ball.caught = false; ball.resultChecked = false; ball.isHBP = false; ball.hitFrames = 0;
     ball.x = PITCHER_POS.x; ball.y = PITCHER_POS.y; ball.z = 0; ball.vz = 0;
     ball.type = state.isTop ? state.pitchType : "FAST";
-    let bSpeed = 2.5 * pData.speedMult * (p.stamina > 30 ? 1 : 0.7);
+    let bSpeed = GAME_SPEED.pitchBase * pData.speedMult * (p.stamina > 30 ? 1 : 0.7);
     const time = (HOME_PLATE.y - PITCHER_POS.y) / bSpeed;
     if (tx === null) tx = 280 + Math.random() * 40;
     ball.vx = (tx - PITCHER_POS.x) / time; ball.vy = bSpeed;
@@ -293,7 +301,10 @@ function update() {
             const dx = ball.x - f.x;
             const dy = ball.y - f.y;
             const dist = Math.sqrt(dx*dx + dy*dy);
-            if (dist > 5) { f.x += dx * 0.03; f.y += dy * 0.03; }
+            if (dist > 5) {
+                f.x += dx * GAME_SPEED.fielderChase * f.speed;
+                f.y += dy * GAME_SPEED.fielderChase * f.speed;
+            }
             if (dist < 25 && ball.z > BALL_FLIGHT.minCatchHeight && Math.random() < 0.1) {
                 ball.caught = true; ball.vx = 0; ball.vy = 0; ball.vz = 0;
             }
@@ -305,8 +316,8 @@ function update() {
         const dy = t.y - f.y;
         const dist = Math.sqrt(dx*dx + dy*dy);
         if (dist > 2) {
-            f.x += dx * 0.08;
-            f.y += dy * 0.08;
+            f.x += dx * GAME_SPEED.fielderReset * f.speed;
+            f.y += dy * GAME_SPEED.fielderReset * f.speed;
             allIn = false;
         } else {
             f.x = t.x;
@@ -335,7 +346,7 @@ function update() {
         }
         if (ball.x > STRIKE_ZONE.x && ball.x < STRIKE_ZONE.x+STRIKE_ZONE.w && ball.y > STRIKE_ZONE.y && ball.y < STRIKE_ZONE.y+STRIKE_ZONE.h) ball.wasInZone = true;
         if (ball.hit) {
-            const drag = ball.z > 0 ? 0.99 : 0.97;
+            const drag = ball.z > 0 ? GAME_SPEED.airDrag : GAME_SPEED.groundDrag;
             ball.vx *= drag;
             ball.vy *= drag;
         }
@@ -345,7 +356,7 @@ function update() {
                 const ang = Math.atan2(dy, dx); let diff = ang - bat.angle; while(diff > Math.PI) diff -= Math.PI*2; while(diff < -Math.PI) diff += Math.PI*2;
                 if (Math.abs(diff) < 0.5) {
                     ball.hit = true; ball.hitFrames = 0; state.screenShake = 10;
-                    const p = (12 + (state.lockedCharge/100) * 10) * getCurrentBatter().power;
+                    const p = (12 + (state.lockedCharge/100) * 10) * getCurrentBatter().power * GAME_SPEED.hitPowerScale;
                     ball.vx = Math.cos(bat.angle + (Math.PI/2 * bat.dir)) * p;
                     ball.vy = Math.sin(bat.angle + (Math.PI/2 * bat.dir)) * p;
                     ball.z = 2;
