@@ -81,6 +81,14 @@ python3 -m http.server 8080
   - `2` CURVE
   - `3` CHANGE
 
+### 手機投球機制
+- 上半局（你是投手）：
+  - 先用下方 `FAST / CURVE / CHANGE` 按鈕選擇球種
+  - 在球場上按住並拖曳準星
+  - 放開手指後出手投球
+- 下半局（你是打者）：
+  - 點擊球場揮棒
+
 ## 專案結構
 
 - `/Users/poperlin/workspace/2026/baseball/index.html`：頁面骨架與計分板

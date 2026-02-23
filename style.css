@@ -1,14 +1,18 @@
+* {
+    box-sizing: border-box;
+}
+
 body {
     margin: 0;
-    padding: 0;
+    padding: 12px;
     background: #222;
     color: #fff;
     font-family: 'Courier New', Courier, monospace;
     display: flex;
     justify-content: center;
-    align-items: center;
-    height: 100vh;
-    overflow: hidden;
+    align-items: flex-start;
+    min-height: 100vh;
+    overflow-x: hidden;
 }
 
 #game-container {
@@ -16,12 +20,14 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
+    width: min(640px, 100%);
 }
 
 #scoreboard {
     display: flex;
     justify-content: space-around;
-    width: 600px;
+    gap: 8px;
+    width: 100%;
     background: #111;
     padding: 10px;
     border: 2px solid #555;
@@ -32,27 +38,115 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
+    flex: 1;
+    min-width: 0;
 }
 
 .label {
     font-size: 12px;
     color: #888;
+    letter-spacing: 0.5px;
 }
 
 .value {
     font-size: 24px;
     color: #f00; /* Digital red */
+    white-space: nowrap;
 }
 
 canvas {
+    display: block;
+    width: 100%;
+    max-width: 600px;
+    height: auto;
+    aspect-ratio: 1 / 1;
     background: #2e7d32;
     border: 5px solid #3e2723;
     border-radius: 10px;
     box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    touch-action: none;
 }
 
 #controls {
     margin-top: 10px;
     text-align: center;
     color: #aaa;
+    font-size: 13px;
+    line-height: 1.35;
+}
+
+#controls p {
+    margin: 4px 0;
+}
+
+#mobile-controls {
+    display: none;
+    width: 100%;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid #555;
+    background: #161616;
+    border-radius: 8px;
+}
+
+.mobile-hint {
+    font-size: 12px;
+    color: #bbb;
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+.pitch-buttons {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+}
+
+.pitch-btn {
+    border: 1px solid #666;
+    background: #222;
+    color: #eee;
+    padding: 7px 6px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+}
+
+.pitch-btn.active {
+    border-color: #ffd600;
+    color: #111;
+    background: #ffd600;
+}
+
+.pitch-btn:disabled {
+    opacity: 0.45;
+}
+
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
+    body {
+        padding: 8px;
+    }
+
+    #scoreboard {
+        margin-bottom: 8px;
+        padding: 8px 6px;
+    }
+
+    .label {
+        font-size: 11px;
+    }
+
+    .value {
+        font-size: 20px;
+    }
+
+    #controls {
+        margin-top: 8px;
+        font-size: 12px;
+    }
+
+    #mobile-controls {
+        display: block;
+    }
 }

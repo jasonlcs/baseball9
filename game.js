@@ -1,8 +1,18 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
+const pitchButtons = Array.from(document.querySelectorAll('.pitch-btn'));
+const mobileHint = document.querySelector('#mobile-controls .mobile-hint');
+const MOBILE_INPUT_QUERY = window.matchMedia("(max-width: 768px), (hover: none) and (pointer: coarse)");
 
 canvas.width = 600;
 canvas.height = 600;
+
+let isMobileInput = MOBILE_INPUT_QUERY.matches;
+if (MOBILE_INPUT_QUERY.addEventListener) {
+    MOBILE_INPUT_QUERY.addEventListener('change', (e) => { isMobileInput = e.matches; });
+} else if (MOBILE_INPUT_QUERY.addListener) {
+    MOBILE_INPUT_QUERY.addListener((e) => { isMobileInput = e.matches; });
+}
 
 const COLORS = {
     grassLight: "#43a047", grassDark: "#388e3c",
@@ -73,9 +83,17 @@ const DEFENSE_SHIFT = {
     middlePinch2BSSX: 14,
     outfieldShallowY: 20
 };
+const BALL_FLIGHT = {
+    gravity: 0.32,
+    minCatchHeight: 8,
+    maxVisualLift: 48
+};
 
-let ball = { x: 0, y: 0, vx: 0, vy: 0, active: false, hit: false, wasInZone: false, caught: false, resultChecked: false, type: "FAST", speed: 2.2, isHBP: false, hitFrames: 0 };
+let ball = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, active: false, hit: false, wasInZone: false, caught: false, resultChecked: false, type: "FAST", speed: 2.2, isHBP: false, hitFrames: 0 };
 let bat = { angle: 0, swinging: false, speed: 0.2, pivot: {x:0, y:0}, dir: 1, base: 0, target: 0 };
+let mobilePitchAim = { active: false, x: 300, y: 520, previewType: "FAST" };
+let activePointerId = null;
+let mobileUiCache = "";
 
 const FIELDERS = [
     { id: "CF", x: 300, y: 100 }, { id: "LF", x: 150, y: 180 }, { id: "RF", x: 450, y: 180 },
@@ -91,6 +109,54 @@ function updateScoreboard() {
     const i = document.getElementById('inning'); i && (i.innerText = state.inning + (state.isTop ? " TOP" : " BOT"));
 }
 
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+function getCanvasPos(clientX, clientY) {
+    const r = canvas.getBoundingClientRect();
+    const sx = canvas.width / r.width;
+    const sy = canvas.height / r.height;
+    return {
+        x: (clientX - r.left) * sx,
+        y: (clientY - r.top) * sy
+    };
+}
+
+function getPitchTypeFromAimY(y) {
+    if (y < 475) return "FAST";
+    if (y < 525) return "CURVE";
+    return "CHANGE";
+}
+
+function setPitchType(type) {
+    if (!PITCH_TYPES[type]) return;
+    state.pitchType = type;
+    mobilePitchAim.previewType = type;
+    syncMobileControls(true);
+}
+
+function syncMobileControls(force = false) {
+    const key = `${state.pitchType}|${state.isTop}|${isMobileInput}`;
+    if (!force && key === mobileUiCache) return;
+    mobileUiCache = key;
+
+    pitchButtons.forEach((btn) => {
+        const selected = btn.dataset.pitch === state.pitchType;
+        btn.classList.toggle('active', selected);
+        btn.disabled = !state.isTop;
+    });
+    if (mobileHint) {
+        mobileHint.textContent = state.isTop
+            ? `手機投球：按住球場拖曳瞄準，放開出手（${state.pitchType}）`
+            : "手機打擊：點擊球場揮棒";
+    }
+}
+
+function updateMobileAim(x, y) {
+    mobilePitchAim.x = clamp(x, STRIKE_ZONE.x - 70, STRIKE_ZONE.x + STRIKE_ZONE.w + 70);
+    mobilePitchAim.y = clamp(y, 440, 570);
+    mobilePitchAim.previewType = getPitchTypeFromAimY(mobilePitchAim.y);
+}
+
 function getCurrentBatter() { return (state.isTop ? awayTeam : homeTeam).roster[(state.isTop ? awayTeam : homeTeam).order]; }
 function getCurrentPitcher() { return (state.isTop ? homeTeam : awayTeam).roster[7]; }
 
@@ -103,6 +169,7 @@ function updateBatSide() {
         bat.pivot = { x: 325, y: 555 }; bat.base = 1.15 * Math.PI; bat.target = 1.95 * Math.PI; bat.dir = 1;
     }
     bat.angle = bat.base;
+    syncMobileControls(true);
 }
 
 function pitch(tx = null) {
@@ -112,7 +179,7 @@ function pitch(tx = null) {
     state.isWaiting = false; state.pitchPath = []; state.hitPath = []; state.lastSpot = null;
     state.swungThisPitch = false; state.showPowerTimer = 0;
     ball.active = true; ball.hit = false; ball.wasInZone = false; ball.caught = false; ball.resultChecked = false; ball.isHBP = false; ball.hitFrames = 0;
-    ball.x = PITCHER_POS.x; ball.y = PITCHER_POS.y;
+    ball.x = PITCHER_POS.x; ball.y = PITCHER_POS.y; ball.z = 0; ball.vz = 0;
     ball.type = state.isTop ? state.pitchType : "FAST";
     let bSpeed = 2.5 * pData.speedMult * (p.stamina > 30 ? 1 : 0.7);
     const time = (HOME_PLATE.y - PITCHER_POS.y) / bSpeed;
@@ -227,7 +294,9 @@ function update() {
             const dy = ball.y - f.y;
             const dist = Math.sqrt(dx*dx + dy*dy);
             if (dist > 5) { f.x += dx * 0.03; f.y += dy * 0.03; }
-            if (dist < 25 && Math.random() < 0.1) { ball.caught = true; ball.vx = 0; ball.vy = 0; }
+            if (dist < 25 && ball.z > BALL_FLIGHT.minCatchHeight && Math.random() < 0.1) {
+                ball.caught = true; ball.vx = 0; ball.vy = 0; ball.vz = 0;
+            }
             allIn = false;
             return;
         }
@@ -247,26 +316,49 @@ function update() {
     state.fieldersResetting = !allIn;
     if (!state.isTop && state.isWaiting && !state.fieldersResetting) { state.autoPitchTimer--; if (state.autoPitchTimer <= 0) { pitch(); state.autoPitchTimer = 150; } }
     if (ball.active) {
-        if (!ball.hit) state.pitchPath.push({x: ball.x, y: ball.y}); else state.hitPath.push({x: ball.x, y: ball.y});
-        let vy = ball.vy; if (ball.y > 480 && ball.y < 540 && !ball.hit) vy *= 0.5;
+        if (!ball.hit) state.pitchPath.push({x: ball.x, y: ball.y});
+        let vy = ball.vy;
+        if (ball.y > 480 && ball.y < 540 && !ball.hit) vy *= 0.5;
         let motionScale = 1;
         if (ball.hit) {
             ball.hitFrames++;
             const t = Math.min(1, ball.hitFrames / 26);
             motionScale = 0.42 + (0.58 * t); // brief bullet-time feel on contact
         }
-        ball.x += ball.vx * motionScale; ball.y += vy * motionScale;
+        ball.x += ball.vx * motionScale;
+        ball.y += vy * motionScale;
+        if (ball.hit) {
+            ball.z = Math.max(0, ball.z + ball.vz * motionScale);
+            ball.vz -= BALL_FLIGHT.gravity * motionScale;
+            if (ball.z === 0 && ball.vz < 0) ball.vz = 0;
+            state.hitPath.push({x: ball.x, y: ball.y, z: ball.z});
+        }
         if (ball.x > STRIKE_ZONE.x && ball.x < STRIKE_ZONE.x+STRIKE_ZONE.w && ball.y > STRIKE_ZONE.y && ball.y < STRIKE_ZONE.y+STRIKE_ZONE.h) ball.wasInZone = true;
-        if (ball.hit) { ball.vx *= 0.99; ball.vy *= 0.99; }
+        if (ball.hit) {
+            const drag = ball.z > 0 ? 0.99 : 0.97;
+            ball.vx *= drag;
+            ball.vy *= drag;
+        }
         if (!ball.hit && bat.swinging) {
             const dx = ball.x - bat.pivot.x; const dy = ball.y - bat.pivot.y; const dist = Math.sqrt(dx*dx+dy*dy);
             if (dist < 80 && dist > 10) {
                 const ang = Math.atan2(dy, dx); let diff = ang - bat.angle; while(diff > Math.PI) diff -= Math.PI*2; while(diff < -Math.PI) diff += Math.PI*2;
-                if (Math.abs(diff) < 0.5) { ball.hit = true; ball.hitFrames = 0; state.screenShake = 10; const p = (12 + (state.lockedCharge/100) * 10) * getCurrentBatter().power; ball.vx = Math.cos(bat.angle + (Math.PI/2 * bat.dir)) * p; ball.vy = Math.sin(bat.angle + (Math.PI/2 * bat.dir)) * p; }
+                if (Math.abs(diff) < 0.5) {
+                    ball.hit = true; ball.hitFrames = 0; state.screenShake = 10;
+                    const p = (12 + (state.lockedCharge/100) * 10) * getCurrentBatter().power;
+                    ball.vx = Math.cos(bat.angle + (Math.PI/2 * bat.dir)) * p;
+                    ball.vy = Math.sin(bat.angle + (Math.PI/2 * bat.dir)) * p;
+                    ball.z = 2;
+                    ball.vz = 4.5 + (state.lockedCharge / 100) * 3.5;
+                }
             }
         }
         if (state.isTop && ball.active && !ball.hit && ball.y > 500 && Math.random() < 0.05) swing();
-        if (ball.y < 0 || ball.y > 600 || ball.x < 0 || ball.x > 600 || (ball.hit && Math.abs(ball.vx) < 0.1)) { state.lastSpot = {x: ball.x, y: ball.y}; checkResult(); ball.active = false; }
+        if (ball.y < 0 || ball.y > 600 || ball.x < 0 || ball.x > 600 || (ball.hit && Math.abs(ball.vx) < 0.1 && ball.z === 0)) {
+            state.lastSpot = {x: ball.x, y: ball.y};
+            checkResult();
+            ball.active = false;
+        }
     }
     if (bat.swinging) { bat.angle += bat.speed * bat.dir; if (bat.dir === -1 ? bat.angle < bat.target : bat.angle > bat.target) bat.swinging = false; }
     else { bat.angle += (bat.base - bat.angle) * 0.1; }
@@ -317,6 +409,30 @@ function drawBaseBag(x, y, occupied = false) {
     ctx.restore();
 }
 
+function drawMobilePitchReticle() {
+    if (!(isMobileInput && state.isTop && state.isWaiting)) return;
+    const x = mobilePitchAim.x;
+    const y = mobilePitchAim.y;
+    const pitchType = mobilePitchAim.active ? mobilePitchAim.previewType : state.pitchType;
+    const color = PITCH_TYPES[pitchType].color;
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, 18, 0, Math.PI * 2);
+    ctx.moveTo(x - 24, y); ctx.lineTo(x + 24, y);
+    ctx.moveTo(x, y - 24); ctx.lineTo(x, y + 24);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(x - 36, y - 40, 72, 16);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 10px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(pitchType, x, y - 28);
+    ctx.restore();
+}
+
 function drawHUD() {
     ctx.fillStyle = COLORS.panel; ctx.fillRect(20, 450, 100, 100); ctx.strokeStyle = "#fff"; ctx.strokeRect(20, 450, 100, 100);
     const drawB = (x, y, occ) => { ctx.fillStyle = occ ? COLORS.activeBase : "rgba(255,255,255,0.2)"; ctx.beginPath(); ctx.moveTo(x, y-10); ctx.lineTo(x+10, y); ctx.lineTo(x, y+10); ctx.lineTo(x-10, y); ctx.fill(); };
@@ -339,8 +455,22 @@ function draw() {
     ctx.fillStyle = COLORS.stadium; ctx.fillRect(0,0,600,40); ctx.fillRect(0,560,600,40); ctx.fillRect(0,0,40,600); ctx.fillRect(560,0,40,600);
     ctx.fillStyle = COLORS.dirt; ctx.beginPath(); ctx.moveTo(300,560); ctx.lineTo(480,400); ctx.lineTo(300,240); ctx.lineTo(120,400); ctx.fill();
     BASE_POSITIONS.forEach((pos, i) => drawBaseBag(pos.x, pos.y, state.bases[i]));
+    drawMobilePitchReticle();
     ctx.setLineDash([4,4]); ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.beginPath(); ctx.moveTo(300,400); state.pitchPath.forEach(p=>ctx.lineTo(p.x,p.y)); ctx.stroke();
-    ctx.setLineDash([]); ctx.strokeStyle = "rgba(255,214,0,0.5)"; ctx.lineWidth=3; ctx.beginPath(); state.hitPath.forEach(p=>ctx.lineTo(p.x,p.y)); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(255,214,0,0.5)";
+    ctx.lineWidth = 3;
+    if (state.hitPath.length > 0) {
+        const first = state.hitPath[0];
+        ctx.beginPath();
+        ctx.moveTo(first.x, first.y - Math.min(BALL_FLIGHT.maxVisualLift, first.z || 0));
+        for (let i = 1; i < state.hitPath.length; i++) {
+            const p = state.hitPath[i];
+            const y = p.y - Math.min(BALL_FLIGHT.maxVisualLift, p.z || 0);
+            ctx.lineTo(p.x, y);
+        }
+        ctx.stroke();
+    }
     if(state.lastSpot) { ctx.fillStyle="rgba(255,214,0,0.6)"; ctx.beginPath(); ctx.arc(state.lastSpot.x, state.lastSpot.y, 8, 0, Math.PI*2); ctx.fill(); }
     ctx.fillStyle = COLORS.dirtDark; ctx.beginPath(); ctx.arc(300,400,25,0,Math.PI*2); ctx.fill();
     ctx.fillStyle = "#fff"; ctx.fillRect(288, 398, 24, 4);
@@ -359,16 +489,93 @@ function draw() {
         ctx.textAlign = "center";
         ctx.fillText("#" + defT.roster[i].number, f.x, f.y + 2);
     });
-    drawBat(); if (ball.active) { ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(ball.x, ball.y, 5, 0, Math.PI*2); ctx.fill(); }
+    drawBat();
+    if (ball.active) {
+        const lift = Math.min(BALL_FLIGHT.maxVisualLift, ball.z);
+        if (ball.hit) {
+            ctx.fillStyle = "rgba(0,0,0,0.25)";
+            ctx.beginPath();
+            ctx.ellipse(ball.x, ball.y + 2, 6 + Math.min(4, ball.z * 0.05), 3.5, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        const radius = 5 + Math.min(2.5, ball.z * 0.03);
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y - lift, radius, 0, Math.PI * 2);
+        ctx.fill();
+    }
     drawHUD();
     ctx.fillStyle="#fff"; ctx.font="bold 16px Courier New"; ctx.textAlign="left"; ctx.fillText(`S: ${"●".repeat(state.strikes)} B: ${"●".repeat(state.balls)} O: ${"●".repeat(state.outs)}`, 50, 70);
     if (state.msgTimer > 0) { ctx.fillStyle=COLORS.text; ctx.font="bold 40px Arial"; ctx.textAlign="center"; ctx.fillText(state.message, 300, 150); state.msgTimer--; }
-    if (state.isWaiting) { ctx.fillStyle="rgba(0,0,0,0.5)"; ctx.fillRect(0,200,600,100); ctx.fillStyle="#fff"; ctx.font="20px Arial"; ctx.textAlign="center"; ctx.fillText(state.isTop?"CLICK TO PITCH":"WAITING...", 300, 260); }
+    if (state.isWaiting) {
+        const waitText = state.isTop ? (isMobileInput ? "TOUCH DRAG & RELEASE" : "CLICK TO PITCH") : "WAITING...";
+        ctx.fillStyle = "rgba(0,0,0,0.5)";
+        ctx.fillRect(0, 200, 600, 100);
+        ctx.fillStyle = "#fff";
+        ctx.font = "20px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(waitText, 300, 260);
+    }
     if (state.screenShake > 0) ctx.restore();
 }
 
-function loop() { update(); draw(); requestAnimationFrame(loop); }
-window.addEventListener('mousedown', (e) => { if (state.isWaiting && state.isTop) { const r = canvas.getBoundingClientRect(); pitch(e.clientX - r.left); } else if (!state.isTop) swing(); });
-window.addEventListener('keydown', (e) => { if (e.code === 'Space') { if (state.isWaiting && state.isTop) pitch(); else if (!state.isTop) swing(); } if (state.isTop) { if (e.key === '1') state.pitchType = "FAST"; if (e.key === '2') state.pitchType = "CURVE"; if (e.key === '3') state.pitchType = "CHANGE"; } });
+function loop() { update(); syncMobileControls(); draw(); requestAnimationFrame(loop); }
+
+pitchButtons.forEach((btn) => {
+    btn.addEventListener('click', () => setPitchType(btn.dataset.pitch));
+});
+
+canvas.addEventListener('pointerdown', (e) => {
+    const pos = getCanvasPos(e.clientX, e.clientY);
+    if (state.isWaiting && state.isTop) {
+        const useTouchPitch = e.pointerType === "touch" || e.pointerType === "pen";
+        if (useTouchPitch) {
+            activePointerId = e.pointerId;
+            if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+            mobilePitchAim.active = true;
+            updateMobileAim(pos.x, pos.y);
+        } else {
+            pitch(pos.x);
+        }
+    } else if (!state.isTop) {
+        swing();
+    }
+});
+
+canvas.addEventListener('pointermove', (e) => {
+    if (!mobilePitchAim.active) return;
+    if (activePointerId !== null && e.pointerId !== activePointerId) return;
+    const pos = getCanvasPos(e.clientX, e.clientY);
+    updateMobileAim(pos.x, pos.y);
+});
+
+function endMobilePitch(e, cancelled = false) {
+    if (activePointerId !== null && e && e.pointerId !== activePointerId) return;
+    const canPitchNow = state.isWaiting && state.isTop;
+    if (mobilePitchAim.active && canPitchNow && !cancelled) {
+        setPitchType(mobilePitchAim.previewType);
+        pitch(mobilePitchAim.x);
+    }
+    mobilePitchAim.active = false;
+    activePointerId = null;
+}
+
+canvas.addEventListener('pointerup', (e) => endMobilePitch(e, false));
+canvas.addEventListener('pointercancel', (e) => endMobilePitch(e, true));
+canvas.addEventListener('pointerleave', (e) => {
+    if (e.pointerType === "touch") endMobilePitch(e, true);
+});
+
+window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+        if (state.isWaiting && state.isTop) pitch();
+        else if (!state.isTop) swing();
+    }
+    if (state.isTop) {
+        if (e.key === '1') setPitchType("FAST");
+        if (e.key === '2') setPitchType("CURVE");
+        if (e.key === '3') setPitchType("CHANGE");
+    }
+});
 updateBatSide(); updateScoreboard(); loop();
 pitch();

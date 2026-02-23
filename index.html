@@ -24,7 +24,16 @@
         </div>
         <canvas id="gameCanvas"></canvas>
         <div id="controls">
-            <p>按 <strong>空白鍵</strong> 或 <strong>點擊畫面</strong> 揮棒</p>
+            <p><strong>桌機：</strong>上半局點擊投球、下半局按空白鍵/點擊揮棒</p>
+            <p><strong>手機：</strong>上半局拖曳準星後放開投球、下半局點擊揮棒</p>
+        </div>
+        <div id="mobile-controls" aria-label="Mobile Pitch Controls">
+            <div class="mobile-hint">手機投球：按住球場拖曳瞄準，放開出手</div>
+            <div class="pitch-buttons">
+                <button type="button" class="pitch-btn active" data-pitch="FAST">FAST</button>
+                <button type="button" class="pitch-btn" data-pitch="CURVE">CURVE</button>
+                <button type="button" class="pitch-btn" data-pitch="CHANGE">CHANGE</button>
+            </div>
         </div>
     </div>
     <script src="game.js"></script>
