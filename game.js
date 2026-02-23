@@ -59,8 +59,22 @@ const PITCHER_POS = { x: 300, y: 400 };
 const HOME_PLATE = { x: 300, y: 560 };
 const STRIKE_ZONE = { x: 270, y: 510, w: 60, h: 50 };
 const BAT_CONFIG = { totalLength: 75, knobWidth: 12, handleWidth: 7, barrelWidth: 18, knobLength: 4, handleLength: 22, taperLength: 18 };
+const BASE_POSITIONS = [
+    { x: 480, y: 400 }, // 1B
+    { x: 300, y: 240 }, // 2B
+    { x: 120, y: 400 }  // 3B
+];
+const DEFENSE_SHIFT = {
+    buntCornerX: 28,
+    buntCornerY: 50,
+    infieldInY: 56,
+    doublePlayMiddleY: 30,
+    holdRunner1BX: 18,
+    middlePinch2BSSX: 14,
+    outfieldShallowY: 20
+};
 
-let ball = { x: 0, y: 0, vx: 0, vy: 0, active: false, hit: false, wasInZone: false, caught: false, resultChecked: false, type: "FAST", speed: 2.2, isHBP: false };
+let ball = { x: 0, y: 0, vx: 0, vy: 0, active: false, hit: false, wasInZone: false, caught: false, resultChecked: false, type: "FAST", speed: 2.2, isHBP: false, hitFrames: 0 };
 let bat = { angle: 0, swinging: false, speed: 0.2, pivot: {x:0, y:0}, dir: 1, base: 0, target: 0 };
 
 const FIELDERS = [
@@ -97,7 +111,7 @@ function pitch(tx = null) {
     const pData = PITCH_TYPES[state.isTop ? state.pitchType : "FAST"];
     state.isWaiting = false; state.pitchPath = []; state.hitPath = []; state.lastSpot = null;
     state.swungThisPitch = false; state.showPowerTimer = 0;
-    ball.active = true; ball.hit = false; ball.wasInZone = false; ball.caught = false; ball.resultChecked = false; ball.isHBP = false;
+    ball.active = true; ball.hit = false; ball.wasInZone = false; ball.caught = false; ball.resultChecked = false; ball.isHBP = false; ball.hitFrames = 0;
     ball.x = PITCHER_POS.x; ball.y = PITCHER_POS.y;
     ball.type = state.isTop ? state.pitchType : "FAST";
     let bSpeed = 2.5 * pData.speedMult * (p.stamina > 30 ? 1 : 0.7);
@@ -155,26 +169,100 @@ function checkResult() {
     if (state.outs >= 3) state.nextInningTimer = 100; else state.nextPitchTimer = 60;
 }
 
+function getDefensiveTargets() {
+    const targets = {};
+    FIELDERS.forEach(f => targets[f.id] = { x: f.homeX, y: f.homeY });
+    const has1B = state.bases[0];
+    const has2B = state.bases[1];
+    const has3B = state.bases[2];
+    const buntGuard = !ball.active && state.isWaiting && state.outs < 2 && (has1B || has2B || has3B);
+    const infieldIn = state.outs < 2 && (has3B || (has1B && has2B));
+    const doublePlayDepth = state.outs < 2 && has1B;
+
+    if (buntGuard) {
+        targets["1B"].x += DEFENSE_SHIFT.buntCornerX;
+        targets["1B"].y += DEFENSE_SHIFT.buntCornerY;
+        targets["3B"].x -= DEFENSE_SHIFT.buntCornerX;
+        targets["3B"].y += DEFENSE_SHIFT.buntCornerY;
+    }
+
+    if (infieldIn) {
+        ["1B", "2B", "SS", "3B"].forEach(id => {
+            targets[id].y += DEFENSE_SHIFT.infieldInY;
+        });
+    }
+
+    if (doublePlayDepth && !infieldIn) {
+        targets["2B"].x += 16;
+        targets["2B"].y -= DEFENSE_SHIFT.doublePlayMiddleY;
+        targets["SS"].x -= 16;
+        targets["SS"].y -= DEFENSE_SHIFT.doublePlayMiddleY;
+    }
+
+    if (has1B) targets["1B"].x += DEFENSE_SHIFT.holdRunner1BX; // Hold runner at first
+    if (has2B) {
+        targets["2B"].x -= DEFENSE_SHIFT.middlePinch2BSSX;
+        targets["SS"].x += DEFENSE_SHIFT.middlePinch2BSSX;
+    } // Middle infield pinch
+    if (has3B && state.outs < 2) {
+        targets["CF"].y += DEFENSE_SHIFT.outfieldShallowY;
+        targets["LF"].y += DEFENSE_SHIFT.outfieldShallowY;
+        targets["RF"].y += DEFENSE_SHIFT.outfieldShallowY;
+    }
+
+    return targets;
+}
+
 function update() {
     if (state.isGameOver) return;
     if (state.nextInningTimer > 0) { state.nextInningTimer--; if (state.nextInningTimer === 1) { state.isTop = !state.isTop; state.outs = 0; state.strikes = 0; state.balls = 0; state.bases = [false, false, false]; if (state.isTop) state.inning++; if (state.inning > 9) state.isGameOver = true; updateBatSide(); state.isWaiting = true; updateScoreboard(); showMessage(state.isTop ? "TOP OF " + state.inning : "BOT OF " + state.inning); } return; }
     if (state.nextPitchTimer > 0) { state.nextPitchTimer--; if (state.nextPitchTimer === 1) state.isWaiting = true; }
     if (!bat.swinging) { state.charge += state.chargeSpeed * state.chargeDir; if (state.charge >= 100 || state.charge <= 20) state.chargeDir *= -1; }
-    let allIn = true; FIELDERS.forEach(f => { const dx = f.homeX - f.x; const dy = f.homeY - f.y; const dist = Math.sqrt(dx*dx+dy*dy); if (dist > 2) { f.x += dx*0.05; f.y += dy*0.05; allIn = false; } else { f.x = f.homeX; f.y = f.homeY; } });
+    const defenseTargets = getDefensiveTargets();
+    const isLiveHit = ball.active && ball.hit && !ball.caught;
+    let allIn = true;
+    FIELDERS.forEach(f => {
+        if (isLiveHit) {
+            const dx = ball.x - f.x;
+            const dy = ball.y - f.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            if (dist > 5) { f.x += dx * 0.03; f.y += dy * 0.03; }
+            if (dist < 25 && Math.random() < 0.1) { ball.caught = true; ball.vx = 0; ball.vy = 0; }
+            allIn = false;
+            return;
+        }
+        const t = defenseTargets[f.id];
+        const dx = t.x - f.x;
+        const dy = t.y - f.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist > 2) {
+            f.x += dx * 0.08;
+            f.y += dy * 0.08;
+            allIn = false;
+        } else {
+            f.x = t.x;
+            f.y = t.y;
+        }
+    });
     state.fieldersResetting = !allIn;
     if (!state.isTop && state.isWaiting && !state.fieldersResetting) { state.autoPitchTimer--; if (state.autoPitchTimer <= 0) { pitch(); state.autoPitchTimer = 150; } }
     if (ball.active) {
         if (!ball.hit) state.pitchPath.push({x: ball.x, y: ball.y}); else state.hitPath.push({x: ball.x, y: ball.y});
         let vy = ball.vy; if (ball.y > 480 && ball.y < 540 && !ball.hit) vy *= 0.5;
-        ball.x += ball.vx; ball.y += vy;
+        let motionScale = 1;
+        if (ball.hit) {
+            ball.hitFrames++;
+            const t = Math.min(1, ball.hitFrames / 26);
+            motionScale = 0.42 + (0.58 * t); // brief bullet-time feel on contact
+        }
+        ball.x += ball.vx * motionScale; ball.y += vy * motionScale;
         if (ball.x > STRIKE_ZONE.x && ball.x < STRIKE_ZONE.x+STRIKE_ZONE.w && ball.y > STRIKE_ZONE.y && ball.y < STRIKE_ZONE.y+STRIKE_ZONE.h) ball.wasInZone = true;
         if (ball.hit) { ball.vx *= 0.99; ball.vy *= 0.99; }
-        FIELDERS.forEach(f => { if (ball.hit && !ball.caught) { const dx = ball.x - f.x; const dy = ball.y - f.y; const d = Math.sqrt(dx*dx+dy*dy); if (d > 5) { f.x += dx*0.03; f.y += dy*0.03; } if (d < 25 && Math.random() < 0.1) { ball.caught = true; ball.vx = 0; ball.vy = 0; } } });
         if (!ball.hit && bat.swinging) {
             const dx = ball.x - bat.pivot.x; const dy = ball.y - bat.pivot.y; const dist = Math.sqrt(dx*dx+dy*dy);
             if (dist < 80 && dist > 10) {
                 const ang = Math.atan2(dy, dx); let diff = ang - bat.angle; while(diff > Math.PI) diff -= Math.PI*2; while(diff < -Math.PI) diff += Math.PI*2;
-                if (Math.abs(diff) < 0.5) { ball.hit = true; state.screenShake = 10; const p = (12 + (state.lockedCharge/100) * 10) * getCurrentBatter().power; ball.vx = Math.cos(bat.angle + (Math.PI/2 * bat.dir)) * p; ball.vy = Math.sin(bat.angle + (Math.PI/2 * bat.dir)) * p; }
+                if (Math.abs(diff) < 0.5) { ball.hit = true; ball.hitFrames = 0; state.screenShake = 10; const p = (12 + (state.lockedCharge/100) * 10) * getCurrentBatter().power; ball.vx = Math.cos(bat.angle + (Math.PI/2 * bat.dir)) * p; ball.vy = Math.sin(bat.angle + (Math.PI/2 * bat.dir)) * p; }
             }
         }
         if (state.isTop && ball.active && !ball.hit && ball.y > 500 && Math.random() < 0.05) swing();
@@ -193,10 +281,50 @@ function drawBat() {
     ctx.restore();
 }
 
+function drawDollHead(x, y, teamColor, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = "#ffccbc";
+    ctx.beginPath();
+    ctx.arc(0, 0, 16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = teamColor;
+    ctx.beginPath();
+    ctx.arc(0, 0, 16, Math.PI, 0);
+    ctx.fill();
+    ctx.fillRect(-20, -4, 40, 4);
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.arc(-6, -2, 1.5, 0, Math.PI * 2);
+    ctx.arc(6, -2, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+}
+
+function drawBaseBag(x, y, occupied = false) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(-10, -10, 20, 20);
+    ctx.strokeStyle = occupied ? COLORS.activeBase : "rgba(0,0,0,0.35)";
+    ctx.lineWidth = occupied ? 3 : 2;
+    ctx.strokeRect(-10, -10, 20, 20);
+    ctx.restore();
+}
+
 function drawHUD() {
     ctx.fillStyle = COLORS.panel; ctx.fillRect(20, 450, 100, 100); ctx.strokeStyle = "#fff"; ctx.strokeRect(20, 450, 100, 100);
     const drawB = (x, y, occ) => { ctx.fillStyle = occ ? COLORS.activeBase : "rgba(255,255,255,0.2)"; ctx.beginPath(); ctx.moveTo(x, y-10); ctx.lineTo(x+10, y); ctx.lineTo(x, y+10); ctx.lineTo(x-10, y); ctx.fill(); };
     drawB(95, 500, state.bases[0]); drawB(70, 475, state.bases[1]); drawB(45, 500, state.bases[2]);
+    const offenseTeam = state.isTop ? awayTeam : homeTeam;
+    if (state.bases[0]) drawDollHead(101, 494, offenseTeam.color, 0.25);
+    if (state.bases[1]) drawDollHead(76, 469, offenseTeam.color, 0.25);
+    if (state.bases[2]) drawDollHead(51, 494, offenseTeam.color, 0.25);
     if (state.showPowerTimer > 0) { const barX = 380; ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(barX-5, 515, 25, 70); ctx.fillStyle = "#333"; ctx.fillRect(barX, 520, 15, 60); ctx.fillStyle = state.lockedCharge > 85 ? "#f00" : "#ffd600"; const h = (state.lockedCharge / 100) * 60; ctx.fillRect(barX, 580 - h, 15, h); ctx.strokeStyle = "#fff"; ctx.strokeRect(barX, 520, 15, 60); }
     const b = getCurrentBatter(); const p = getCurrentPitcher();
     ctx.fillStyle = COLORS.panel; ctx.fillRect(400, 450, 180, 100); ctx.textAlign = "left"; ctx.fillStyle = COLORS.text;
@@ -210,6 +338,7 @@ function draw() {
     const gs = 40; for(let y=0; y<15; y++) for(let x=0; x<15; x++) { ctx.fillStyle = (x+y)%2==0?COLORS.grassLight:COLORS.grassDark; ctx.fillRect(x*gs, y*gs, gs, gs); }
     ctx.fillStyle = COLORS.stadium; ctx.fillRect(0,0,600,40); ctx.fillRect(0,560,600,40); ctx.fillRect(0,0,40,600); ctx.fillRect(560,0,40,600);
     ctx.fillStyle = COLORS.dirt; ctx.beginPath(); ctx.moveTo(300,560); ctx.lineTo(480,400); ctx.lineTo(300,240); ctx.lineTo(120,400); ctx.fill();
+    BASE_POSITIONS.forEach((pos, i) => drawBaseBag(pos.x, pos.y, state.bases[i]));
     ctx.setLineDash([4,4]); ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.beginPath(); ctx.moveTo(300,400); state.pitchPath.forEach(p=>ctx.lineTo(p.x,p.y)); ctx.stroke();
     ctx.setLineDash([]); ctx.strokeStyle = "rgba(255,214,0,0.5)"; ctx.lineWidth=3; ctx.beginPath(); state.hitPath.forEach(p=>ctx.lineTo(p.x,p.y)); ctx.stroke();
     if(state.lastSpot) { ctx.fillStyle="rgba(255,214,0,0.6)"; ctx.beginPath(); ctx.arc(state.lastSpot.x, state.lastSpot.y, 8, 0, Math.PI*2); ctx.fill(); }
@@ -217,7 +346,19 @@ function draw() {
     ctx.fillStyle = "#fff"; ctx.fillRect(288, 398, 24, 4);
     ctx.beginPath(); ctx.moveTo(300,545); ctx.lineTo(315,557); ctx.lineTo(315,575); ctx.lineTo(285,575); ctx.lineTo(285,557); ctx.fill();
     const defT = state.isTop ? homeTeam : awayTeam;
-    FIELDERS.forEach((f, i) => { ctx.save(); ctx.translate(f.x, f.y-25); ctx.fillStyle = "#ffccbc"; ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill(); ctx.strokeStyle = "#000"; ctx.lineWidth = 1; ctx.stroke(); ctx.fillStyle = defT.color; ctx.beginPath(); ctx.arc(0,0,16,Math.PI,0); ctx.fill(); ctx.fillRect(-20, -4, 40, 4); ctx.fillStyle = "#000"; ctx.beginPath(); ctx.arc(-6,-2,1.5,0,Math.PI*2); ctx.arc(6,-2,1.5,0,Math.PI*2); ctx.fill(); ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(-15, 18, 30, 12); ctx.fillStyle = "#fff"; ctx.font = "bold 9px Arial"; ctx.textAlign="center"; ctx.fillText("#"+defT.roster[i].number, 0, 27); ctx.restore(); });
+    const offT = state.isTop ? awayTeam : homeTeam;
+    BASE_POSITIONS.forEach((pos, i) => {
+        if (state.bases[i]) drawDollHead(pos.x, pos.y - 26, offT.color, 1);
+    });
+    FIELDERS.forEach((f, i) => {
+        drawDollHead(f.x, f.y - 25, defT.color, 1);
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(f.x - 15, f.y - 7, 30, 12);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 9px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText("#" + defT.roster[i].number, f.x, f.y + 2);
+    });
     drawBat(); if (ball.active) { ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(ball.x, ball.y, 5, 0, Math.PI*2); ctx.fill(); }
     drawHUD();
     ctx.fillStyle="#fff"; ctx.font="bold 16px Courier New"; ctx.textAlign="left"; ctx.fillText(`S: ${"●".repeat(state.strikes)} B: ${"●".repeat(state.balls)} O: ${"●".repeat(state.outs)}`, 50, 70);
