@@ -97,6 +97,12 @@ const GAME_SPEED = {
     airDrag: 0.986,          // 空中阻力
     groundDrag: 0.94         // 落地滾動阻力
 };
+const CATCHER_STRATEGY = {
+    outOfRangePenalty: 10000,        // Coverage penalty applied when ball is outside a fielder's range
+    offSpeedMixProb: 0.5,            // Probability of off-speed pitch vs power hitters
+    twoStrikeFastballProb: 0.6,      // Probability of fastball on 2-strike count
+    lateInningOffSpeedProb: 0.4      // Probability of off-speed when leading late in game
+};
 
 let ball = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, active: false, hit: false, wasInZone: false, caught: false, resultChecked: false, type: "FAST", speed: 2.2, isHBP: false, hitFrames: 0 };
 let bat = { angle: 0, swinging: false, speed: 0.2, pivot: {x:0, y:0}, dir: 1, base: 0, target: 0 };
@@ -105,8 +111,13 @@ let activePointerId = null;
 let mobileUiCache = "";
 
 const FIELDERS = [
-    { id: "CF", x: 300, y: 100 }, { id: "LF", x: 150, y: 180 }, { id: "RF", x: 450, y: 180 },
-    { id: "SS", x: 220, y: 300 }, { id: "2B", x: 380, y: 300 }, { id: "3B", x: 180, y: 440 }, { id: "1B", x: 420, y: 440 }
+    { id: "CF", x: 300, y: 100, coverageRange: 200 },
+    { id: "LF", x: 150, y: 180, coverageRange: 180 },
+    { id: "RF", x: 450, y: 180, coverageRange: 180 },
+    { id: "SS", x: 220, y: 300, coverageRange: 130 },
+    { id: "2B", x: 380, y: 300, coverageRange: 130 },
+    { id: "3B", x: 180, y: 440, coverageRange: 110 },
+    { id: "1B", x: 420, y: 440, coverageRange: 110 }
 ].map(f => ({ ...f, homeX: f.x, homeY: f.y, speed: 1.0 + Math.random()*0.5 }));
 
 // --- 輔助功能 ---
@@ -184,12 +195,12 @@ function updateBatSide() {
 function pitch(tx = null) {
     if (ball.active || state.fieldersResetting || state.isGameOver) return;
     const p = getCurrentPitcher();
-    const pData = PITCH_TYPES[state.isTop ? state.pitchType : "FAST"];
+    const pData = PITCH_TYPES[state.pitchType];
     state.isWaiting = false; state.pitchPath = []; state.hitPath = []; state.lastSpot = null;
     state.swungThisPitch = false; state.showPowerTimer = 0;
     ball.active = true; ball.hit = false; ball.wasInZone = false; ball.caught = false; ball.resultChecked = false; ball.isHBP = false; ball.hitFrames = 0;
     ball.x = PITCHER_POS.x; ball.y = PITCHER_POS.y; ball.z = 0; ball.vz = 0;
-    ball.type = state.isTop ? state.pitchType : "FAST";
+    ball.type = state.pitchType;
     let bSpeed = GAME_SPEED.pitchBase * pData.speedMult * (p.stamina > 30 ? 1 : 0.7);
     const time = (HOME_PLATE.y - PITCHER_POS.y) / bSpeed;
     if (tx === null) tx = 280 + Math.random() * 40;
@@ -289,6 +300,58 @@ function getDefensiveTargets() {
     return targets;
 }
 
+// --- Defense Module ---
+// Returns the fielder best positioned to catch a ball at (bx, by).
+// Fielders outside their coverageRange receive a large penalty so nearby
+// specialists always take priority over out-of-zone players.
+function selectFielderForBall(bx, by) {
+    let best = null, bestScore = Infinity;
+    FIELDERS.forEach(f => {
+        const dFromHome = Math.sqrt((bx - f.homeX) ** 2 + (by - f.homeY) ** 2);
+        const coveragePenalty = dFromHome > f.coverageRange ? CATCHER_STRATEGY.outOfRangePenalty : 0;
+        const score = Math.sqrt((bx - f.x) ** 2 + (by - f.y) ** 2) + coveragePenalty;
+        if (score < bestScore) { bestScore = score; best = f; }
+    });
+    return best;
+}
+
+// --- Catcher Strategy Module ---
+// Returns { pitchType, targetX } recommendation based on batter tendencies
+// and game context (inning, runners on base, count).
+function getCatcherRecommendation() {
+    const batter = getCurrentBatter();
+
+    // Right-handed batters pull to left (negative x), left-handed pull to right (positive x)
+    const pullBias = batter.batSide === "R" ? -1 : 1;
+    let targetX = 300 + pullBias * 25;
+    let pitchType = "FAST";
+
+    // Power hitters: mix in off-speed to disrupt timing
+    if (batter.power > 1.1) {
+        pitchType = Math.random() < CATCHER_STRATEGY.offSpeedMixProb ? "CURVE" : "CHANGE";
+    }
+
+    // Runners in scoring position (2nd or 3rd base): prioritise strikes with fastball
+    if (state.bases[1] || state.bases[2]) {
+        pitchType = "FAST";
+        targetX = 300; // Reduce walk risk with centred target
+    }
+
+    // 2-strike count: go for strikeout or waste pitch away from pull side
+    if (state.strikes === 2) {
+        pitchType = Math.random() < CATCHER_STRATEGY.twoStrikeFastballProb ? "FAST" : "CURVE";
+        targetX = 300 - pullBias * 15;
+    }
+
+    // Late innings with a lead: mix off-speed to avoid extra-base hits
+    const teamLead = state.isTop ? state.scoreAway - state.scoreHome : state.scoreHome - state.scoreAway;
+    if (state.inning >= 7 && teamLead > 2) {
+        if (Math.random() < CATCHER_STRATEGY.lateInningOffSpeedProb) pitchType = "CURVE";
+    }
+
+    return { pitchType, targetX };
+}
+
 function update() {
     if (state.isGameOver) return;
     if (state.nextInningTimer > 0) { state.nextInningTimer--; if (state.nextInningTimer === 1) { state.isTop = !state.isTop; state.outs = 0; state.strikes = 0; state.balls = 0; state.bases = [false, false, false]; if (state.isTop) state.inning++; if (state.inning > 9) state.isGameOver = true; updateBatSide(); state.isWaiting = true; updateScoreboard(); showMessage(state.isTop ? "TOP OF " + state.inning : "BOT OF " + state.inning); } return; }
@@ -297,19 +360,29 @@ function update() {
     const defenseTargets = getDefensiveTargets();
     const isLiveHit = ball.active && ball.hit && !ball.caught;
     let allIn = true;
+    const chaser = isLiveHit ? selectFielderForBall(ball.x, ball.y) : null;
     FIELDERS.forEach(f => {
         if (isLiveHit) {
-            const dx = ball.x - f.x;
-            const dy = ball.y - f.y;
-            const dist = Math.sqrt(dx*dx + dy*dy);
-            if (dist > 5) {
-                f.x += dx * GAME_SPEED.fielderChase * f.speed;
-                f.y += dy * GAME_SPEED.fielderChase * f.speed;
-            }
-            if (dist < 25 && ball.z > BALL_FLIGHT.minCatchHeight && Math.random() < 0.1) {
-                ball.caught = true; ball.vx = 0; ball.vy = 0; ball.vz = 0;
-            }
             allIn = false;
+            if (f === chaser) {
+                const dx = ball.x - f.x, dy = ball.y - f.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist > 5) {
+                    f.x += dx * GAME_SPEED.fielderChase * f.speed;
+                    f.y += dy * GAME_SPEED.fielderChase * f.speed;
+                }
+                if (dist < 25 && ball.z > BALL_FLIGHT.minCatchHeight && Math.random() < 0.1) {
+                    ball.caught = true; ball.vx = 0; ball.vy = 0; ball.vz = 0;
+                }
+            } else {
+                const t = defenseTargets[f.id];
+                const dx = t.x - f.x, dy = t.y - f.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist > 2) {
+                    f.x += dx * GAME_SPEED.fielderReset * f.speed;
+                    f.y += dy * GAME_SPEED.fielderReset * f.speed;
+                } else { f.x = t.x; f.y = t.y; }
+            }
             return;
         }
         const t = defenseTargets[f.id];
@@ -326,7 +399,7 @@ function update() {
         }
     });
     state.fieldersResetting = !allIn;
-    if (!state.isTop && state.isWaiting && !state.fieldersResetting) { state.autoPitchTimer--; if (state.autoPitchTimer <= 0) { pitch(); state.autoPitchTimer = 150; } }
+    if (!state.isTop && state.isWaiting && !state.fieldersResetting) { state.autoPitchTimer--; if (state.autoPitchTimer <= 0) { const rec = getCatcherRecommendation(); setPitchType(rec.pitchType); pitch(rec.targetX); state.autoPitchTimer = 150; } }
     if (ball.active) {
         if (!ball.hit) state.pitchPath.push({x: ball.x, y: ball.y});
         let vy = ball.vy;
