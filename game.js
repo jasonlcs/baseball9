@@ -170,7 +170,9 @@ function syncMobileControls(force = false) {
     });
     if (mobileHint) {
         mobileHint.textContent = state.isTop
-            ? `點擊九宮格選擇進壘點，或用方向鍵移動 Space 投球（${state.pitchType}）`
+            ? (isMobileInput
+                ? `手機投球：按住球場拖曳瞄準，放開出手（${state.pitchType}）`
+                : `點擊九宮格選擇進壘點，或用方向鍵移動 Space 投球（${state.pitchType}）`)
             : "手機打擊：點擊球場揮棒";
     }
 }
@@ -500,7 +502,7 @@ function drawBaseBag(x, y, occupied = false) {
 }
 
 function drawMobilePitchReticle() {
-    if (!(isMobileInput && state.isTop && state.isWaiting)) return;
+    if (!(isMobileInput && mobilePitchAim.active && state.isTop && state.isWaiting)) return;
     const x = mobilePitchAim.x;
     const y = mobilePitchAim.y;
     const pitchType = mobilePitchAim.active ? mobilePitchAim.previewType : state.pitchType;
@@ -546,8 +548,6 @@ function drawPitchGrid() {
     const G = PITCH_GRID_UI;
     const panelH = G.titleH + G.typeH + G.cellH * 3;
     const zoneLabels = [["高外","高中","高內"],["中外","正中","中內"],["低外","低中","低內"]];
-    const typeColors = { FAST: "#ff7043", CURVE: "#4fc3f7", CHANGE: "#ffd600" };
-
     ctx.save();
     ctx.fillStyle = "rgba(0, 10, 45, 0.88)";
     ctx.fillRect(G.x, G.y, G.w, panelH);
@@ -564,7 +564,7 @@ function drawPitchGrid() {
         const bx = G.x + i * G.cellW;
         const by = G.y + G.titleH;
         const sel = state.pitchType === type;
-        const col = typeColors[type];
+        const col = PITCH_TYPES[type].color;
         ctx.fillStyle = sel ? col + "33" : "rgba(255,255,255,0.06)";
         ctx.fillRect(bx, by, G.cellW, G.typeH);
         ctx.strokeStyle = sel ? col : "rgba(255,255,255,0.2)";
@@ -744,7 +744,7 @@ window.addEventListener('keydown', (e) => {
         if (state.isWaiting && state.isTop) pitch(PITCH_ZONE_X[state.gridCol], PITCH_ZONE_Y[state.gridRow]);
         else if (!state.isTop) swing();
     }
-    if (state.isTop && state.isWaiting) {
+    if (state.isTop && state.isWaiting && !state.isGameOver) {
         if (e.key === 'ArrowLeft')  { state.gridCol = Math.max(0, state.gridCol - 1); e.preventDefault(); }
         if (e.key === 'ArrowRight') { state.gridCol = Math.min(2, state.gridCol + 1); e.preventDefault(); }
         if (e.key === 'ArrowUp')    { state.gridRow = Math.max(0, state.gridRow - 1); e.preventDefault(); }
