@@ -63,12 +63,16 @@ let state = {
     fieldersResetting: false,
     autoPitchTimer: 120, nextPitchTimer: 0, nextInningTimer: 0,
     isGameOver: false, screenShake: 0,
-    swungThisPitch: false
+    swungThisPitch: false,
+    gridCol: 1, gridRow: 1
 };
 
 const PITCHER_POS = { x: 300, y: 400 };
 const HOME_PLATE = { x: 300, y: 560 };
 const STRIKE_ZONE = { x: 270, y: 510, w: 60, h: 50 };
+const PITCH_ZONE_X = [STRIKE_ZONE.x + 10, STRIKE_ZONE.x + Math.round(STRIKE_ZONE.w / 2), STRIKE_ZONE.x + STRIKE_ZONE.w - 10];
+const PITCH_ZONE_Y = [STRIKE_ZONE.y + 8, STRIKE_ZONE.y + 25, STRIKE_ZONE.y + 40];
+const PITCH_GRID_UI = { x: 150, y: 178, w: 300, titleH: 24, typeH: 36, cellW: 100, cellH: 62 };
 const BAT_CONFIG = { totalLength: 75, knobWidth: 12, handleWidth: 7, barrelWidth: 18, knobLength: 4, handleLength: 22, taperLength: 18 };
 const BASE_POSITIONS = [
     { x: 480, y: 400 }, // 1B
@@ -166,7 +170,7 @@ function syncMobileControls(force = false) {
     });
     if (mobileHint) {
         mobileHint.textContent = state.isTop
-            ? `手機投球：按住球場拖曳瞄準，放開出手（${state.pitchType}）`
+            ? `點擊九宮格選擇進壘點，或用方向鍵移動 Space 投球（${state.pitchType}）`
             : "手機打擊：點擊球場揮棒";
     }
 }
@@ -192,7 +196,7 @@ function updateBatSide() {
     syncMobileControls(true);
 }
 
-function pitch(tx = null) {
+function pitch(tx = null, ty = null) {
     if (ball.active || state.fieldersResetting || state.isGameOver) return;
     const p = getCurrentPitcher();
     const pData = PITCH_TYPES[state.pitchType];
@@ -202,8 +206,9 @@ function pitch(tx = null) {
     ball.x = PITCHER_POS.x; ball.y = PITCHER_POS.y; ball.z = 0; ball.vz = 0;
     ball.type = state.pitchType;
     let bSpeed = GAME_SPEED.pitchBase * pData.speedMult * (p.stamina > 30 ? 1 : 0.7);
-    const time = (HOME_PLATE.y - PITCHER_POS.y) / bSpeed;
     if (tx === null) tx = 280 + Math.random() * 40;
+    if (ty === null) ty = HOME_PLATE.y;
+    const time = (ty - PITCHER_POS.y) / bSpeed;
     ball.vx = (tx - PITCHER_POS.x) / time; ball.vy = bSpeed;
     p.stamina = Math.max(0, p.stamina - pData.cost);
 }
@@ -518,6 +523,78 @@ function drawMobilePitchReticle() {
     ctx.restore();
 }
 
+function getPitchGridClick(px, py) {
+    if (!state.isTop || !state.isWaiting || state.isGameOver) return null;
+    const G = PITCH_GRID_UI;
+    if (px < G.x || px >= G.x + G.w) return null;
+    const typeTop = G.y + G.titleH, typeBottom = typeTop + G.typeH;
+    if (py >= typeTop && py < typeBottom) {
+        const col = clamp(Math.floor((px - G.x) / G.cellW), 0, 2);
+        return { kind: 'type', value: ["FAST", "CURVE", "CHANGE"][col] };
+    }
+    const gridTop = typeBottom, gridBottom = gridTop + G.cellH * 3;
+    if (py >= gridTop && py < gridBottom) {
+        const col = clamp(Math.floor((px - G.x) / G.cellW), 0, 2);
+        const row = clamp(Math.floor((py - gridTop) / G.cellH), 0, 2);
+        return { kind: 'cell', col, row };
+    }
+    return null;
+}
+
+function drawPitchGrid() {
+    if (!state.isTop || !state.isWaiting || state.isGameOver) return;
+    const G = PITCH_GRID_UI;
+    const panelH = G.titleH + G.typeH + G.cellH * 3;
+    const zoneLabels = [["高外","高中","高內"],["中外","正中","中內"],["低外","低中","低內"]];
+    const typeColors = { FAST: "#ff7043", CURVE: "#4fc3f7", CHANGE: "#ffd600" };
+
+    ctx.save();
+    ctx.fillStyle = "rgba(0, 10, 45, 0.88)";
+    ctx.fillRect(G.x, G.y, G.w, panelH);
+    ctx.strokeStyle = "rgba(255, 215, 0, 0.7)";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(G.x, G.y, G.w, panelH);
+
+    ctx.fillStyle = "#ffd600";
+    ctx.font = "bold 13px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("⚾ 選擇球種 & 進壘點", G.x + G.w / 2, G.y + G.titleH - 5);
+
+    ["FAST", "CURVE", "CHANGE"].forEach((type, i) => {
+        const bx = G.x + i * G.cellW;
+        const by = G.y + G.titleH;
+        const sel = state.pitchType === type;
+        const col = typeColors[type];
+        ctx.fillStyle = sel ? col + "33" : "rgba(255,255,255,0.06)";
+        ctx.fillRect(bx, by, G.cellW, G.typeH);
+        ctx.strokeStyle = sel ? col : "rgba(255,255,255,0.2)";
+        ctx.lineWidth = sel ? 2 : 1;
+        ctx.strokeRect(bx, by, G.cellW, G.typeH);
+        ctx.fillStyle = sel ? col : "#888";
+        ctx.font = sel ? "bold 12px Arial" : "11px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(type, bx + G.cellW / 2, by + G.typeH / 2 + 4);
+    });
+
+    for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 3; col++) {
+            const cx = G.x + col * G.cellW;
+            const cy = G.y + G.titleH + G.typeH + row * G.cellH;
+            const sel = state.gridRow === row && state.gridCol === col;
+            ctx.fillStyle = sel ? "rgba(255, 215, 0, 0.3)" : "rgba(255,255,255,0.06)";
+            ctx.fillRect(cx, cy, G.cellW, G.cellH);
+            ctx.strokeStyle = sel ? "#ffd700" : "rgba(255,255,255,0.2)";
+            ctx.lineWidth = sel ? 2.5 : 1;
+            ctx.strokeRect(cx, cy, G.cellW, G.cellH);
+            ctx.fillStyle = sel ? "#ffd700" : "rgba(255,255,255,0.7)";
+            ctx.font = sel ? "bold 14px Arial" : "13px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText(zoneLabels[row][col], cx + G.cellW / 2, cy + G.cellH / 2 + 5);
+        }
+    }
+    ctx.restore();
+}
+
 function drawHUD() {
     ctx.fillStyle = COLORS.panel; ctx.fillRect(20, 450, 100, 100); ctx.strokeStyle = "#fff"; ctx.strokeRect(20, 450, 100, 100);
     const drawB = (x, y, occ) => { ctx.fillStyle = occ ? COLORS.activeBase : "rgba(255,255,255,0.2)"; ctx.beginPath(); ctx.moveTo(x, y-10); ctx.lineTo(x+10, y); ctx.lineTo(x, y+10); ctx.lineTo(x-10, y); ctx.fill(); };
@@ -592,15 +669,15 @@ function draw() {
     drawHUD();
     ctx.fillStyle="#fff"; ctx.font="bold 16px Courier New"; ctx.textAlign="left"; ctx.fillText(`S: ${"●".repeat(state.strikes)} B: ${"●".repeat(state.balls)} O: ${"●".repeat(state.outs)}`, 50, 70);
     if (state.msgTimer > 0) { ctx.fillStyle=COLORS.text; ctx.font="bold 40px Arial"; ctx.textAlign="center"; ctx.fillText(state.message, 300, 150); state.msgTimer--; }
-    if (state.isWaiting) {
-        const waitText = state.isTop ? (isMobileInput ? "TOUCH DRAG & RELEASE" : "CLICK TO PITCH") : "WAITING...";
+    if (state.isWaiting && !state.isTop) {
         ctx.fillStyle = "rgba(0,0,0,0.5)";
         ctx.fillRect(0, 200, 600, 100);
         ctx.fillStyle = "#fff";
         ctx.font = "20px Arial";
         ctx.textAlign = "center";
-        ctx.fillText(waitText, 300, 260);
+        ctx.fillText("WAITING...", 300, 260);
     }
+    drawPitchGrid();
     if (state.screenShake > 0) ctx.restore();
 }
 
@@ -617,6 +694,13 @@ pitchButtons.forEach((btn) => {
 canvas.addEventListener('pointerdown', (e) => {
     const pos = getCanvasPos(e.clientX, e.clientY);
     if (state.isWaiting && state.isTop) {
+        const gc = getPitchGridClick(pos.x, pos.y);
+        if (gc) {
+            if (gc.kind === 'type') { setPitchType(gc.value); return; }
+            state.gridCol = gc.col; state.gridRow = gc.row;
+            pitch(PITCH_ZONE_X[gc.col], PITCH_ZONE_Y[gc.row]);
+            return;
+        }
         const useTouchPitch = e.pointerType === "touch" || e.pointerType === "pen";
         if (useTouchPitch) {
             activePointerId = e.pointerId;
@@ -657,8 +741,14 @@ canvas.addEventListener('pointerleave', (e) => {
 
 window.addEventListener('keydown', (e) => {
     if (e.code === 'Space') {
-        if (state.isWaiting && state.isTop) pitch();
+        if (state.isWaiting && state.isTop) pitch(PITCH_ZONE_X[state.gridCol], PITCH_ZONE_Y[state.gridRow]);
         else if (!state.isTop) swing();
+    }
+    if (state.isTop && state.isWaiting) {
+        if (e.key === 'ArrowLeft')  { state.gridCol = Math.max(0, state.gridCol - 1); e.preventDefault(); }
+        if (e.key === 'ArrowRight') { state.gridCol = Math.min(2, state.gridCol + 1); e.preventDefault(); }
+        if (e.key === 'ArrowUp')    { state.gridRow = Math.max(0, state.gridRow - 1); e.preventDefault(); }
+        if (e.key === 'ArrowDown')  { state.gridRow = Math.min(2, state.gridRow + 1); e.preventDefault(); }
     }
     if (state.isTop) {
         if (e.key === '1') setPitchType("FAST");
