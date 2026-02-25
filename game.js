@@ -29,20 +29,74 @@ const PITCH_TYPES = {
     CHANGE: { name: "CHANGE", speedMult: 0.6, cost: 2, color: "#ffd600" }
 };
 
+// Pitcher archetypes: each defines weighted pitch mix and preferred entry zones per pitch type
+const PITCHER_STYLES = [
+    {   // Power pitcher: relies on fastball, uses curve to finish counts
+        signaturePitch: "FAST",
+        pitchRepertoire: {
+            FAST:  { weight: 0.65, preferredZones: [{col:1, row:0}, {col:0, row:1}] },
+            CURVE: { weight: 0.35, preferredZones: [{col:2, row:2}, {col:2, row:1}] }
+        }
+    },
+    {   // Curveball specialist: heavy breaking ball, uses fastball to set up
+        signaturePitch: "CURVE",
+        pitchRepertoire: {
+            FAST:   { weight: 0.40, preferredZones: [{col:1, row:1}, {col:0, row:0}] },
+            CURVE:  { weight: 0.50, preferredZones: [{col:2, row:2}, {col:0, row:2}] },
+            CHANGE: { weight: 0.10, preferredZones: [{col:1, row:2}] }
+        }
+    },
+    {   // Changeup artist: disrupts timing with offspeed
+        signaturePitch: "CHANGE",
+        pitchRepertoire: {
+            FAST:   { weight: 0.45, preferredZones: [{col:0, row:0}, {col:2, row:0}] },
+            CURVE:  { weight: 0.10, preferredZones: [{col:2, row:2}] },
+            CHANGE: { weight: 0.45, preferredZones: [{col:1, row:2}, {col:2, row:2}] }
+        }
+    },
+    {   // Balanced finesse pitcher: mixes all three with precise location
+        signaturePitch: "FAST",
+        pitchRepertoire: {
+            FAST:   { weight: 0.45, preferredZones: [{col:2, row:1}, {col:0, row:1}] },
+            CURVE:  { weight: 0.25, preferredZones: [{col:0, row:2}, {col:1, row:2}] },
+            CHANGE: { weight: 0.30, preferredZones: [{col:2, row:2}, {col:2, row:1}] }
+        }
+    }
+];
+
 // --- 球員與隊伍系統 ---
-function createPlayer(teamColor) {
-    return {
+function createPlayer(isPitcher = false) {
+    const batSide = Math.random() < 0.5 ? "L" : "R";
+    // Batters lean toward their inside corner; mix in one other random zone
+    const insideCol = batSide === "R" ? 2 : 0;
+    const allZones = [];
+    for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) allZones.push({col: c, row: r});
+    const inner = allZones.filter(z => z.col === insideCol).sort(() => Math.random() - 0.5);
+    const outer = allZones.filter(z => z.col !== insideCol).sort(() => Math.random() - 0.5);
+    const preferredZones = [inner[0], outer[0]];
+    const allTypes = Object.keys(PITCH_TYPES);
+    const preferredPitchTypes = allTypes.filter(() => Math.random() < 0.5);
+    if (preferredPitchTypes.length === 0) preferredPitchTypes.push(allTypes[Math.floor(Math.random() * allTypes.length)]);
+    const player = {
         number: Math.floor(Math.random() * 99) + 1,
-        batSide: Math.random() < 0.5 ? "L" : "R",
+        batSide,
         power: 0.85 + Math.random() * 0.45,
         speed: 1.0 + Math.random() * 1.5,
-        stamina: 100
+        stamina: 100,
+        preferredZones,
+        preferredPitchTypes
     };
+    if (isPitcher) {
+        const style = PITCHER_STYLES[Math.floor(Math.random() * PITCHER_STYLES.length)];
+        player.signaturePitch = style.signaturePitch;
+        player.pitchRepertoire = style.pitchRepertoire;
+    }
+    return player;
 }
 
 function createTeam(name, color) {
     let players = [];
-    for(let i=0; i<9; i++) players.push(createPlayer(color));
+    for (let i = 0; i < 9; i++) players.push(createPlayer(i === 7));
     return { name, color, roster: players, order: 0 };
 }
 
@@ -323,31 +377,45 @@ function selectFielderForBall(bx, by) {
 }
 
 // --- Catcher Strategy Module ---
-// Returns { pitchType, targetX } recommendation based on batter tendencies
-// and game context (inning, runners on base, count).
+// Returns { pitchType, targetX, targetY } recommendation based on pitcher repertoire,
+// batter tendencies, and game context (inning, runners on base, count).
 function getCatcherRecommendation() {
     const batter = getCurrentBatter();
+    const pitcher = getCurrentPitcher();
 
     // Right-handed batters pull to left (negative x), left-handed pull to right (positive x)
     const pullBias = batter.batSide === "R" ? -1 : 1;
     let targetX = 300 + pullBias * 25;
+    let targetY = null;
     let pitchType = "FAST";
+
+    // Base: use pitcher's weighted repertoire to select pitch type
+    if (pitcher.pitchRepertoire) {
+        const types = Object.keys(pitcher.pitchRepertoire);
+        const total = types.reduce((s, t) => s + pitcher.pitchRepertoire[t].weight, 0);
+        let rand = Math.random() * total;
+        pitchType = types[types.length - 1];
+        for (let i = 0; i < types.length; i++) {
+            rand -= pitcher.pitchRepertoire[types[i]].weight;
+            if (rand <= 0) { pitchType = types[i]; break; }
+        }
+    }
 
     // Power hitters: mix in off-speed to disrupt timing
     if (batter.power > 1.1) {
-        pitchType = Math.random() < CATCHER_STRATEGY.offSpeedMixProb ? "CURVE" : "CHANGE";
+        if (Math.random() < CATCHER_STRATEGY.offSpeedMixProb) {
+            pitchType = pitcher.pitchRepertoire?.CURVE ? "CURVE" : "CHANGE";
+        }
     }
 
     // Runners in scoring position (2nd or 3rd base): prioritise strikes with fastball
     if (state.bases[1] || state.bases[2]) {
         pitchType = "FAST";
-        targetX = 300; // Reduce walk risk with centred target
     }
 
     // 2-strike count: go for strikeout or waste pitch away from pull side
     if (state.strikes === 2) {
         pitchType = Math.random() < CATCHER_STRATEGY.twoStrikeFastballProb ? "FAST" : "CURVE";
-        targetX = 300 - pullBias * 15;
     }
 
     // Late innings with a lead: mix off-speed to avoid extra-base hits
@@ -356,7 +424,22 @@ function getCatcherRecommendation() {
         if (Math.random() < CATCHER_STRATEGY.lateInningOffSpeedProb) pitchType = "CURVE";
     }
 
-    return { pitchType, targetX };
+    // Pick target zone from pitcher's repertoire; avoid batter's preferred (hot) zones
+    if (pitcher.pitchRepertoire && pitcher.pitchRepertoire[pitchType]) {
+        const zones = pitcher.pitchRepertoire[pitchType].preferredZones;
+        const avoidZones = batter.preferredZones || [];
+        const safeZones = zones.filter(z => !avoidZones.some(az => az.col === z.col && az.row === z.row));
+        const pool = safeZones.length > 0 ? safeZones : zones;
+        const zone = pool[Math.floor(Math.random() * pool.length)];
+        targetX = PITCH_ZONE_X[zone.col];
+        targetY = PITCH_ZONE_Y[zone.row];
+    }
+
+    // Situation-based location overrides
+    if (state.bases[1] || state.bases[2]) targetX = 300; // Reduce walk risk with centred target
+    if (state.strikes === 2) targetX = 300 - pullBias * 15; // Waste pitch away from pull side
+
+    return { pitchType, targetX, targetY };
 }
 
 function update() {
@@ -406,7 +489,7 @@ function update() {
         }
     });
     state.fieldersResetting = !allIn;
-    if (!state.isTop && state.isWaiting && !state.fieldersResetting) { state.autoPitchTimer--; if (state.autoPitchTimer <= 0) { const rec = getCatcherRecommendation(); setPitchType(rec.pitchType); pitch(rec.targetX); state.autoPitchTimer = 150; } }
+    if (!state.isTop && state.isWaiting && !state.fieldersResetting) { state.autoPitchTimer--; if (state.autoPitchTimer <= 0) { const rec = getCatcherRecommendation(); setPitchType(rec.pitchType); pitch(rec.targetX, rec.targetY); state.autoPitchTimer = 150; } }
     if (ball.active) {
         if (!ball.hit) state.pitchPath.push({x: ball.x, y: ball.y});
         let vy = ball.vy;
@@ -592,6 +675,22 @@ function drawPitchGrid() {
             ctx.fillText(zoneLabels[row][col], cx + G.cellW / 2, cy + G.cellH / 2 + 5);
         }
     }
+    // Highlight pitcher's preferred zones for the selected pitch type
+    const pitcher = getCurrentPitcher();
+    if (pitcher.pitchRepertoire && pitcher.pitchRepertoire[state.pitchType]) {
+        const pitchColor = PITCH_TYPES[state.pitchType].color;
+        pitcher.pitchRepertoire[state.pitchType].preferredZones.forEach(z => {
+            const cx = G.x + z.col * G.cellW;
+            const cy = G.y + G.titleH + G.typeH + z.row * G.cellH;
+            ctx.strokeStyle = pitchColor;
+            ctx.lineWidth = 2.5;
+            ctx.strokeRect(cx + 4, cy + 4, G.cellW - 8, G.cellH - 8);
+            ctx.fillStyle = pitchColor;
+            ctx.font = "9px Arial";
+            ctx.textAlign = "right";
+            ctx.fillText("★", cx + G.cellW - 4, cy + G.cellH - 4);
+        });
+    }
     ctx.restore();
 }
 
@@ -607,7 +706,9 @@ function drawHUD() {
     const b = getCurrentBatter(); const p = getCurrentPitcher();
     ctx.fillStyle = COLORS.panel; ctx.fillRect(400, 450, 180, 100); ctx.textAlign = "left"; ctx.fillStyle = COLORS.text;
     ctx.fillText(`CUR: #${b.number} (${b.batSide})`, 410, 470); ctx.fillText(`PWR: ${(b.power*100).toFixed(0)}%`, 410, 485);
-    ctx.fillStyle = COLORS.panel; ctx.fillRect(20, 130, 150, 60); ctx.fillStyle="#fff"; ctx.fillText(`PITCHER: #${p.number}`, 30, 145); ctx.fillStyle="#444"; ctx.fillRect(30, 155, 100, 6); ctx.fillStyle=p.stamina>30?"#4caf50":"#f44336"; ctx.fillRect(30, 155, p.stamina, 6);
+    if (b.preferredPitchTypes) { ctx.fillStyle = "#aaa"; ctx.fillText(`HOT: ${b.preferredPitchTypes.join("/")}`, 410, 500); }
+    ctx.fillStyle = COLORS.panel; ctx.fillRect(20, 130, 150, 72); ctx.fillStyle="#fff"; ctx.fillText(`PITCHER: #${p.number}`, 30, 145); ctx.fillStyle="#444"; ctx.fillRect(30, 155, 100, 6); ctx.fillStyle=p.stamina>30?"#4caf50":"#f44336"; ctx.fillRect(30, 155, p.stamina, 6);
+    if (p.signaturePitch) { ctx.fillStyle = PITCH_TYPES[p.signaturePitch].color; ctx.fillText(`ACE: ${p.signaturePitch}`, 30, 172); }
 }
 
 function draw() {
