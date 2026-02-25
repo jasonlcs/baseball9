@@ -139,7 +139,8 @@ let state = {
     autoPitchTimer: 120, nextPitchTimer: 0, nextInningTimer: 0,
     isGameOver: false, screenShake: 0,
     swungThisPitch: false,
-    gridCol: 1, gridRow: 1
+    gridCol: 1, gridRow: 1,
+    gameStarted: false
 };
 
 const PITCHER_POS = { x: 300, y: 400 };
@@ -190,13 +191,13 @@ let activePointerId = null;
 let mobileUiCache = "";
 
 const FIELDERS = [
-    { id: "CF", x: 300, y: 100, coverageRange: 200 },
-    { id: "LF", x: 150, y: 180, coverageRange: 180 },
-    { id: "RF", x: 450, y: 180, coverageRange: 180 },
-    { id: "SS", x: 220, y: 300, coverageRange: 130 },
-    { id: "2B", x: 380, y: 300, coverageRange: 130 },
-    { id: "3B", x: 180, y: 440, coverageRange: 110 },
-    { id: "1B", x: 420, y: 440, coverageRange: 110 }
+    { id: "CF", x: 300, y: 140, coverageRange: 200 },
+    { id: "LF", x: 130, y: 210, coverageRange: 180 },
+    { id: "RF", x: 470, y: 210, coverageRange: 180 },
+    { id: "SS", x: 215, y: 335, coverageRange: 130 },
+    { id: "2B", x: 385, y: 335, coverageRange: 130 },
+    { id: "3B", x: 150, y: 425, coverageRange: 110 },
+    { id: "1B", x: 450, y: 425, coverageRange: 110 }
 ].map(f => ({ ...f, homeX: f.x, homeY: f.y, speed: 1.0 + Math.random()*0.5 }));
 
 // --- 輔助功能 ---
@@ -280,7 +281,7 @@ function pitch(tx = null, ty = null) {
     state.isWaiting = false; state.pitchPath = []; state.hitPath = []; state.lastSpot = null;
     state.swungThisPitch = false; state.showPowerTimer = 0;
     ball.active = true; ball.hit = false; ball.wasInZone = false; ball.caught = false; ball.resultChecked = false; ball.isHBP = false; ball.hitFrames = 0;
-    ball.x = PITCHER_POS.x; ball.y = PITCHER_POS.y; ball.z = 0; ball.vz = 0;
+    ball.x = PITCHER_POS.x; ball.y = PITCHER_POS.y; ball.z = 0; ball.vz = 3.5;
     ball.type = state.pitchType;
     let bSpeed = GAME_SPEED.pitchBase * pData.speedMult * (p.stamina > 30 ? 1 : 0.7);
     if (tx === null) tx = 280 + Math.random() * 40;
@@ -479,7 +480,7 @@ function getCatcherRecommendation() {
 }
 
 function update() {
-    if (state.isGameOver) return;
+    if (!state.gameStarted || state.isGameOver) return;
     if (state.nextInningTimer > 0) { state.nextInningTimer--; if (state.nextInningTimer === 1) { state.isTop = !state.isTop; state.outs = 0; state.strikes = 0; state.balls = 0; state.bases = [false, false, false]; if (state.isTop) state.inning++; if (state.inning > 9) state.isGameOver = true; updateBatSide(); state.isWaiting = true; updateScoreboard(); showMessage(state.isTop ? "TOP OF " + state.inning : "BOT OF " + state.inning); } return; }
     if (state.nextPitchTimer > 0) { state.nextPitchTimer--; if (state.nextPitchTimer === 1) state.isWaiting = true; }
     if (!bat.swinging) { state.charge += state.chargeSpeed * state.chargeDir; if (state.charge >= 100 || state.charge <= 20) state.chargeDir *= -1; }
@@ -527,9 +528,7 @@ function update() {
     state.fieldersResetting = !allIn;
     if (!state.isTop && state.isWaiting && !state.fieldersResetting) { state.autoPitchTimer--; if (state.autoPitchTimer <= 0) { const rec = getCatcherRecommendation(); setPitchType(rec.pitchType); pitch(rec.targetX, rec.targetY); state.autoPitchTimer = 150; } }
     if (ball.active) {
-        if (!ball.hit) state.pitchPath.push({x: ball.x, y: ball.y});
-        let vy = ball.vy;
-        if (ball.y > 480 && ball.y < 540 && !ball.hit) vy *= 0.5;
+        if (!ball.hit) state.pitchPath.push({x: ball.x, y: ball.y, z: ball.z});
         let motionScale = 1;
         if (ball.hit) {
             ball.hitFrames++;
@@ -537,11 +536,11 @@ function update() {
             motionScale = 0.42 + (0.58 * t); // brief bullet-time feel on contact
         }
         ball.x += ball.vx * motionScale;
-        ball.y += vy * motionScale;
+        ball.y += ball.vy * motionScale;
+        ball.z = Math.max(0, ball.z + ball.vz * motionScale);
+        ball.vz -= BALL_FLIGHT.gravity * motionScale;
+        if (ball.z === 0 && ball.vz < 0) ball.vz = 0;
         if (ball.hit) {
-            ball.z = Math.max(0, ball.z + ball.vz * motionScale);
-            ball.vz -= BALL_FLIGHT.gravity * motionScale;
-            if (ball.z === 0 && ball.vz < 0) ball.vz = 0;
             state.hitPath.push({x: ball.x, y: ball.y, z: ball.z});
         }
         if (ball.x > STRIKE_ZONE.x && ball.x < STRIKE_ZONE.x+STRIKE_ZONE.w && ball.y > STRIKE_ZONE.y && ball.y < STRIKE_ZONE.y+STRIKE_ZONE.h) ball.wasInZone = true;
@@ -730,32 +729,96 @@ function drawPitchGrid() {
     ctx.restore();
 }
 
+function drawStartScreen() {
+    const w = canvas.width;
+    const h = canvas.height;
+    const cx = w / 2;
+    const sy = h / 600; // scale factor relative to design height of 600
+    ctx.fillStyle = "rgba(0,0,30,0.92)";
+    ctx.fillRect(0, 0, w, h);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffd600";
+    ctx.font = "bold 64px Arial";
+    ctx.fillText("⚾", cx, 195 * sy);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 34px 'Courier New'";
+    ctx.fillText("RETRO BASEBALL", cx, 265 * sy);
+    ctx.font = "15px Arial";
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.fillText("上半局：選擇球種 & 進壘點後投球", cx, 315 * sy);
+    ctx.fillText("下半局：按空白鍵或點擊螢幕揮棒", cx, 338 * sy);
+    ctx.fillStyle = "#ffd600";
+    ctx.font = "bold 26px Arial";
+    ctx.fillText("▶  PRESS START  ◀", cx, 405 * sy);
+    ctx.font = "13px Arial";
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.fillText("CLICK  /  SPACE  /  TAP  to  START", cx, 445 * sy);
+}
+
 function drawHUD() {
-    ctx.fillStyle = COLORS.panel; ctx.fillRect(20, 450, 100, 100); ctx.strokeStyle = "#fff"; ctx.strokeRect(20, 450, 100, 100);
-    const drawB = (x, y, occ) => { ctx.fillStyle = occ ? COLORS.activeBase : "rgba(255,255,255,0.2)"; ctx.beginPath(); ctx.moveTo(x, y-10); ctx.lineTo(x+10, y); ctx.lineTo(x, y+10); ctx.lineTo(x-10, y); ctx.fill(); };
-    drawB(95, 500, state.bases[0]); drawB(70, 475, state.bases[1]); drawB(45, 500, state.bases[2]);
+    const panelBg = "rgba(0,0,0,0.62)";
+    const borderC = "rgba(255,255,255,0.32)";
+    // Compact bases panel (bottom-left)
+    ctx.fillStyle = panelBg; ctx.fillRect(14, 464, 84, 64);
+    ctx.strokeStyle = borderC; ctx.lineWidth = 1; ctx.strokeRect(14, 464, 84, 64);
+    const drawB = (x, y, occ) => { ctx.fillStyle = occ ? COLORS.activeBase : "rgba(255,255,255,0.18)"; ctx.beginPath(); ctx.moveTo(x, y-9); ctx.lineTo(x+9, y); ctx.lineTo(x, y+9); ctx.lineTo(x-9, y); ctx.fill(); };
+    drawB(87, 504, state.bases[0]); drawB(64, 481, state.bases[1]); drawB(41, 504, state.bases[2]);
     const offenseTeam = state.isTop ? awayTeam : homeTeam;
-    if (state.bases[0]) drawDollHead(101, 494, offenseTeam.color, 0.25);
-    if (state.bases[1]) drawDollHead(76, 469, offenseTeam.color, 0.25);
-    if (state.bases[2]) drawDollHead(51, 494, offenseTeam.color, 0.25);
+    if (state.bases[0]) drawDollHead(93, 498, offenseTeam.color, 0.22);
+    if (state.bases[1]) drawDollHead(70, 475, offenseTeam.color, 0.22);
+    if (state.bases[2]) drawDollHead(47, 498, offenseTeam.color, 0.22);
     if (state.showPowerTimer > 0) { const barX = 380; ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(barX-5, 515, 25, 70); ctx.fillStyle = "#333"; ctx.fillRect(barX, 520, 15, 60); ctx.fillStyle = state.lockedCharge > 85 ? "#f00" : "#ffd600"; const h = (state.lockedCharge / 100) * 60; ctx.fillRect(barX, 580 - h, 15, h); ctx.strokeStyle = "#fff"; ctx.strokeRect(barX, 520, 15, 60); }
     const b = getCurrentBatter(); const p = getCurrentPitcher();
-    ctx.fillStyle = COLORS.panel; ctx.fillRect(400, 450, 180, 100); ctx.textAlign = "left"; ctx.fillStyle = COLORS.text;
-    ctx.fillText(`CUR: #${b.number} (${b.batSide})`, 410, 470); ctx.fillText(`PWR: ${(b.power*100).toFixed(0)}%`, 410, 485);
-    if (b.preferredPitchTypes) { ctx.fillStyle = "#ffd600"; ctx.fillText(`HOT: ${b.preferredPitchTypes.join("/")}`, 410, 500); }
-    ctx.fillStyle = COLORS.panel; ctx.fillRect(20, 130, 150, 72); ctx.fillStyle="#fff"; ctx.fillText(`PITCHER: #${p.number}`, 30, 145); ctx.fillStyle="#444"; ctx.fillRect(30, 155, 100, 6); ctx.fillStyle=p.stamina>30?"#4caf50":"#f44336"; ctx.fillRect(30, 155, p.stamina, 6);
-    if (p.signaturePitch) { ctx.fillStyle = PITCH_TYPES[p.signaturePitch].color; ctx.fillText(`ACE: ${p.signaturePitch}`, 30, 182); }
+    // Compact batter panel (bottom-right)
+    ctx.fillStyle = panelBg; ctx.fillRect(416, 464, 168, 64);
+    ctx.strokeStyle = borderC; ctx.lineWidth = 1; ctx.strokeRect(416, 464, 168, 64);
+    ctx.textAlign = "left"; ctx.font = "11px Arial";
+    ctx.fillStyle = COLORS.text;
+    ctx.fillText(`BAT #${b.number}(${b.batSide}) PWR:${(b.power*100).toFixed(0)}%`, 424, 479);
+    if (b.preferredPitchTypes) { ctx.fillStyle = "#ffd600"; ctx.fillText(`HOT: ${b.preferredPitchTypes.join("/")}`, 424, 493); }
+    ctx.fillStyle = "#ccc"; ctx.fillText(`P#${p.number}`, 424, 507);
+    ctx.fillStyle = "#444"; ctx.fillRect(454, 500, 120, 5);
+    ctx.fillStyle = p.stamina > 30 ? "#4caf50" : "#f44336"; ctx.fillRect(454, 500, p.stamina * 1.2, 5);
+    // Compact pitcher panel (top-left)
+    ctx.fillStyle = panelBg; ctx.fillRect(14, 124, 130, 56);
+    ctx.strokeStyle = borderC; ctx.lineWidth = 1; ctx.strokeRect(14, 124, 130, 56);
+    ctx.fillStyle = "#fff"; ctx.font = "11px Arial"; ctx.fillText(`PITCHER #${p.number}`, 22, 139);
+    ctx.fillStyle = "#444"; ctx.fillRect(22, 147, 100, 5);
+    ctx.fillStyle = p.stamina > 30 ? "#4caf50" : "#f44336"; ctx.fillRect(22, 147, p.stamina, 5);
+    if (p.signaturePitch) { ctx.fillStyle = PITCH_TYPES[p.signaturePitch].color; ctx.fillText(`ACE: ${p.signaturePitch}`, 22, 168); }
 }
 
 function draw() {
     ctx.clearRect(0, 0, 600, 600);
+    if (!state.gameStarted) { drawStartScreen(); return; }
     if (state.screenShake > 0) { ctx.save(); ctx.translate((Math.random()-0.5)*state.screenShake, (Math.random()-0.5)*state.screenShake); state.screenShake *= 0.8; }
     const gs = 40; for(let y=0; y<15; y++) for(let x=0; x<15; x++) { ctx.fillStyle = (x+y)%2==0?COLORS.grassLight:COLORS.grassDark; ctx.fillRect(x*gs, y*gs, gs, gs); }
     ctx.fillStyle = COLORS.stadium; ctx.fillRect(0,0,600,40); ctx.fillRect(0,560,600,40); ctx.fillRect(0,0,40,600); ctx.fillRect(560,0,40,600);
+    // Foul lines: extend from home plate through 1B/3B to the canvas boundary
+    // Foul angles are derived from BASE_POSITIONS so the lines pass through the base corners
+    const foulAngleRight = Math.atan2(BASE_POSITIONS[0].y - HOME_PLATE.y, BASE_POSITIONS[0].x - HOME_PLATE.x);
+    const foulAngleLeft  = Math.atan2(BASE_POSITIONS[2].y - HOME_PLATE.y, BASE_POSITIONS[2].x - HOME_PLATE.x);
+    // Foul-line far endpoint: extend from home plate along the foul angle to the canvas edge (x=0 or x=canvas.width)
+    const foulLen = canvas.width / Math.abs(Math.cos(foulAngleRight)); // reach x=canvas.width from x=HOME_PLATE.x
+    const foulRx = HOME_PLATE.x + foulLen * Math.cos(foulAngleRight);
+    const foulRy = HOME_PLATE.y + foulLen * Math.sin(foulAngleRight);
+    const foulLx = HOME_PLATE.x + foulLen * Math.cos(foulAngleLeft);
+    const foulLy = HOME_PLATE.y + foulLen * Math.sin(foulAngleLeft);
+    ctx.setLineDash([]); ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255,255,255,0.55)";
+    ctx.beginPath(); ctx.moveTo(HOME_PLATE.x, HOME_PLATE.y); ctx.lineTo(foulRx, foulRy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(HOME_PLATE.x, HOME_PLATE.y); ctx.lineTo(foulLx, foulLy); ctx.stroke();
+    // Arcs centered on home plate, spanning between the two foul angles (clockwise = counter-clockwise in canvas coords)
+    const OUTFIELD_RADIUS  = 420; // outfield wall (~420 px from home plate)
+    const INFIELD_RADIUS   = 245; // infield/outfield grass boundary
+    ctx.strokeStyle = "rgba(255,255,255,0.28)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(HOME_PLATE.x, HOME_PLATE.y, OUTFIELD_RADIUS, foulAngleRight, foulAngleLeft, true); ctx.stroke();
+    ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(HOME_PLATE.x, HOME_PLATE.y, INFIELD_RADIUS, foulAngleRight, foulAngleLeft, true); ctx.stroke();
     ctx.fillStyle = COLORS.dirt; ctx.beginPath(); ctx.moveTo(300,560); ctx.lineTo(480,400); ctx.lineTo(300,240); ctx.lineTo(120,400); ctx.fill();
     BASE_POSITIONS.forEach((pos, i) => drawBaseBag(pos.x, pos.y, state.bases[i]));
     drawMobilePitchReticle();
-    ctx.setLineDash([4,4]); ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.beginPath(); ctx.moveTo(300,400); state.pitchPath.forEach(p=>ctx.lineTo(p.x,p.y)); ctx.stroke();
+    ctx.setLineDash([4,4]); ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.beginPath(); ctx.moveTo(300,400); state.pitchPath.forEach(p=>ctx.lineTo(p.x, p.y - Math.min(BALL_FLIGHT.maxVisualLift, p.z || 0))); ctx.stroke();
     ctx.setLineDash([]);
     ctx.strokeStyle = "rgba(255,214,0,0.5)";
     ctx.lineWidth = 3;
@@ -829,6 +892,7 @@ pitchButtons.forEach((btn) => {
 });
 
 canvas.addEventListener('pointerdown', (e) => {
+    if (!state.gameStarted) { state.gameStarted = true; return; }
     const pos = getCanvasPos(e.clientX, e.clientY);
     if (state.isWaiting && state.isTop) {
         const gc = getPitchGridClick(pos.x, pos.y);
@@ -877,6 +941,17 @@ canvas.addEventListener('pointerleave', (e) => {
 });
 
 window.addEventListener('keydown', (e) => {
+    if (!state.gameStarted) {
+        if (e.code === 'Space' ||
+            e.key === 'ArrowLeft' ||
+            e.key === 'ArrowRight' ||
+            e.key === 'ArrowUp' ||
+            e.key === 'ArrowDown') {
+            e.preventDefault();
+        }
+        state.gameStarted = true;
+        return;
+    }
     if (e.code === 'Space') {
         if (state.isWaiting && state.isTop) pitch(PITCH_ZONE_X[state.gridCol], PITCH_ZONE_Y[state.gridRow]);
         else if (!state.isTop) swing();
@@ -894,4 +969,3 @@ window.addEventListener('keydown', (e) => {
     }
 });
 updateBatSide(); updateScoreboard(); loop();
-pitch();
