@@ -730,25 +730,29 @@ function drawPitchGrid() {
 }
 
 function drawStartScreen() {
+    const w = canvas.width;
+    const h = canvas.height;
+    const cx = w / 2;
+    const sy = h / 600; // scale factor relative to design height of 600
     ctx.fillStyle = "rgba(0,0,30,0.92)";
-    ctx.fillRect(0, 0, 600, 600);
+    ctx.fillRect(0, 0, w, h);
     ctx.textAlign = "center";
     ctx.fillStyle = "#ffd600";
     ctx.font = "bold 64px Arial";
-    ctx.fillText("⚾", 300, 195);
+    ctx.fillText("⚾", cx, 195 * sy);
     ctx.fillStyle = "#ffffff";
     ctx.font = "bold 34px 'Courier New'";
-    ctx.fillText("RETRO BASEBALL", 300, 265);
+    ctx.fillText("RETRO BASEBALL", cx, 265 * sy);
     ctx.font = "15px Arial";
     ctx.fillStyle = "rgba(255,255,255,0.7)";
-    ctx.fillText("上半局：選擇球種 & 進壘點後投球", 300, 315);
-    ctx.fillText("下半局：按空白鍵或點擊螢幕揮棒", 300, 338);
+    ctx.fillText("上半局：選擇球種 & 進壘點後投球", cx, 315 * sy);
+    ctx.fillText("下半局：按空白鍵或點擊螢幕揮棒", cx, 338 * sy);
     ctx.fillStyle = "#ffd600";
     ctx.font = "bold 26px Arial";
-    ctx.fillText("▶  PRESS START  ◀", 300, 405);
+    ctx.fillText("▶  PRESS START  ◀", cx, 405 * sy);
     ctx.font = "13px Arial";
     ctx.fillStyle = "rgba(255,255,255,0.45)";
-    ctx.fillText("CLICK  /  SPACE  /  TAP  to  START", 300, 445);
+    ctx.fillText("CLICK  /  SPACE  /  TAP  to  START", cx, 445 * sy);
 }
 
 function drawHUD() {
@@ -790,17 +794,27 @@ function draw() {
     if (state.screenShake > 0) { ctx.save(); ctx.translate((Math.random()-0.5)*state.screenShake, (Math.random()-0.5)*state.screenShake); state.screenShake *= 0.8; }
     const gs = 40; for(let y=0; y<15; y++) for(let x=0; x<15; x++) { ctx.fillStyle = (x+y)%2==0?COLORS.grassLight:COLORS.grassDark; ctx.fillRect(x*gs, y*gs, gs, gs); }
     ctx.fillStyle = COLORS.stadium; ctx.fillRect(0,0,600,40); ctx.fillRect(0,560,600,40); ctx.fillRect(0,0,40,600); ctx.fillRect(560,0,40,600);
-    // Foul lines
+    // Foul lines: extend from home plate through 1B/3B to the canvas boundary
+    // Foul angles are derived from BASE_POSITIONS so the lines pass through the base corners
+    const foulAngleRight = Math.atan2(BASE_POSITIONS[0].y - HOME_PLATE.y, BASE_POSITIONS[0].x - HOME_PLATE.x);
+    const foulAngleLeft  = Math.atan2(BASE_POSITIONS[2].y - HOME_PLATE.y, BASE_POSITIONS[2].x - HOME_PLATE.x);
+    // Foul-line far endpoint: extend from home plate along the foul angle to the canvas edge (x=0 or x=canvas.width)
+    const foulLen = canvas.width / Math.abs(Math.cos(foulAngleRight)); // reach x=canvas.width from x=HOME_PLATE.x
+    const foulRx = HOME_PLATE.x + foulLen * Math.cos(foulAngleRight);
+    const foulRy = HOME_PLATE.y + foulLen * Math.sin(foulAngleRight);
+    const foulLx = HOME_PLATE.x + foulLen * Math.cos(foulAngleLeft);
+    const foulLy = HOME_PLATE.y + foulLen * Math.sin(foulAngleLeft);
     ctx.setLineDash([]); ctx.lineWidth = 2;
     ctx.strokeStyle = "rgba(255,255,255,0.55)";
-    ctx.beginPath(); ctx.moveTo(300, 560); ctx.lineTo(600, 293); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(300, 560); ctx.lineTo(0, 293); ctx.stroke();
-    // Outfield arc
+    ctx.beginPath(); ctx.moveTo(HOME_PLATE.x, HOME_PLATE.y); ctx.lineTo(foulRx, foulRy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(HOME_PLATE.x, HOME_PLATE.y); ctx.lineTo(foulLx, foulLy); ctx.stroke();
+    // Arcs centered on home plate, spanning between the two foul angles (clockwise = counter-clockwise in canvas coords)
+    const OUTFIELD_RADIUS  = 420; // outfield wall (~420 px from home plate)
+    const INFIELD_RADIUS   = 245; // infield/outfield grass boundary
     ctx.strokeStyle = "rgba(255,255,255,0.28)"; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(300, 560, 420, -0.728, -2.414, true); ctx.stroke();
-    // Infield/outfield transition arc
+    ctx.beginPath(); ctx.arc(HOME_PLATE.x, HOME_PLATE.y, OUTFIELD_RADIUS, foulAngleRight, foulAngleLeft, true); ctx.stroke();
     ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(300, 560, 245, -0.728, -2.414, true); ctx.stroke();
+    ctx.beginPath(); ctx.arc(HOME_PLATE.x, HOME_PLATE.y, INFIELD_RADIUS, foulAngleRight, foulAngleLeft, true); ctx.stroke();
     ctx.fillStyle = COLORS.dirt; ctx.beginPath(); ctx.moveTo(300,560); ctx.lineTo(480,400); ctx.lineTo(300,240); ctx.lineTo(120,400); ctx.fill();
     BASE_POSITIONS.forEach((pos, i) => drawBaseBag(pos.x, pos.y, state.bases[i]));
     drawMobilePitchReticle();
@@ -927,7 +941,17 @@ canvas.addEventListener('pointerleave', (e) => {
 });
 
 window.addEventListener('keydown', (e) => {
-    if (!state.gameStarted) { state.gameStarted = true; return; }
+    if (!state.gameStarted) {
+        if (e.code === 'Space' ||
+            e.key === 'ArrowLeft' ||
+            e.key === 'ArrowRight' ||
+            e.key === 'ArrowUp' ||
+            e.key === 'ArrowDown') {
+            e.preventDefault();
+        }
+        state.gameStarted = true;
+        return;
+    }
     if (e.code === 'Space') {
         if (state.isWaiting && state.isTop) pitch(PITCH_ZONE_X[state.gridCol], PITCH_ZONE_Y[state.gridRow]);
         else if (!state.isTop) swing();
