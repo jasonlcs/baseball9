@@ -318,8 +318,8 @@ function checkResult() {
     else if (ball.hit) {
         const angle = Math.atan2(ball.y - HOME_PLATE.y, ball.x - HOME_PLATE.x);
         const isFoul = (ball.y > HOME_PLATE.y) || (angle < -2.4 || angle > -0.7);
-        if (isFoul) { if (state.strikes < 2) state.strikes++; showMessage("FOUL"); }
-        else if (ball.caught) { state.outs++; showMessage("OUT!"); team.order = (team.order + 1) % 9; updateBatSide(); }
+        if (ball.caught) { state.outs++; state.strikes = 0; state.balls = 0; showMessage("OUT!"); team.order = (team.order + 1) % 9; updateBatSide(); }
+        else if (isFoul) { if (state.strikes < 2) state.strikes++; showMessage("FOUL"); }
         else {
             const d = Math.sqrt((ball.x - HOME_PLATE.x)**2 + (ball.y - HOME_PLATE.y)**2);
             state.strikes = 0; state.balls = 0;
